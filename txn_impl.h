@@ -292,7 +292,7 @@ transaction<Protocol, Traits>::commit(bool doThrow)
             static std::string probe6_name(
               std::string(__PRETTY_FUNCTION__) + std::string(":sort_write_nodes:")));
         ANON_REGION(probe6_name.c_str(), &transaction_base::g_txn_commit_probe6_cg);
-        write_dbtuples.sort(); // in-place
+        std::sort(write_dbtuples.begin(), write_dbtuples.end()); // in-place
       }
       typename dbtuple_write_info_vec::iterator it     = write_dbtuples.begin();
       typename dbtuple_write_info_vec::iterator it_end = write_dbtuples.end();

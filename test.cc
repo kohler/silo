@@ -12,7 +12,7 @@
 #include "txn.h"
 #include "txn_btree.h"
 #include "varint.h"
-#include "small_vector.h"
+#include "masstree/local_vector.hh"
 #include "static_vector.h"
 #include "small_unordered_map.h"
 #include "static_unordered_map.h"
@@ -279,7 +279,7 @@ UtilTest()
 
 namespace small_vector_ns {
 
-typedef small_vector<string, 4> vec_type;
+typedef local_vector<string, 4> vec_type;
 typedef static_vector<string, 4> static_vec_type;
 typedef vector<string> stl_vec_type;
 
@@ -441,7 +441,7 @@ Test()
 
   {
     for (int iter = 0; iter < 10; iter++) {
-      small_vector<foo> v;
+      local_vector<foo, SMALL_SIZE_VEC> v;
       for (int i = 0; i < 20; i++) {
         v.push_back(foo(i, i + 1, i + 2, i + 3));
         ALWAYS_ASSERT(v.back().a == i);
@@ -463,7 +463,7 @@ Test()
   }
 
   {
-    small_vector<int> v;
+    local_vector<int, SMALL_SIZE_VEC> v;
     v.push_back(10);
     v.push_back(2);
     v.push_back(5);
@@ -472,14 +472,14 @@ Test()
     v.push_back(100);
     sort(v.begin(), v.end());
 
-    small_vector<int> v1;
+    local_vector<int, SMALL_SIZE_VEC> v1;
     v1.push_back(10);
     v1.push_back(2);
     v1.push_back(5);
     v1.push_back(7);
     v1.push_back(3);
     v1.push_back(100);
-    v1.sort();
+    sort(v1.begin(), v1.end());
 
     vector<int> stl_v;
     stl_v.push_back(10);
@@ -495,7 +495,7 @@ Test()
   }
 
   {
-    small_vector<int, 3> v;
+    local_vector<int, 3> v;
     v.push_back(10);
     v.push_back(2);
     v.push_back(5);
@@ -504,14 +504,14 @@ Test()
     v.push_back(100);
     sort(v.begin(), v.end());
 
-    small_vector<int, 3> v1;
+    local_vector<int, 3> v1;
     v1.push_back(10);
     v1.push_back(2);
     v1.push_back(5);
     v1.push_back(7);
     v1.push_back(3);
     v1.push_back(100);
-    v1.sort();
+    sort(v1.begin(), v1.end());
 
     vector<int> stl_v;
     stl_v.push_back(10);
@@ -528,7 +528,7 @@ Test()
 
   {
     fast_random r(29395);
-    small_vector< pair<uint32_t, uint32_t> > v;
+    local_vector< pair<uint32_t, uint32_t>, SMALL_SIZE_VEC > v;
     vector< pair<uint32_t, uint32_t> > stl_v;
     for (size_t i = 0; i < 48; i++) {
       uint32_t x = r.next();
@@ -544,7 +544,7 @@ Test()
 
   {
     // test C++11 features
-    small_vector<string, 4> v;
+    local_vector<string, 4> v;
     v.emplace_back("hello");
     string world = "world";
     v.push_back(move(world));
@@ -982,7 +982,7 @@ public:
     //CounterTest();
     //UtilTest();
     //varint::Test();
-    //small_vector_ns::Test();
+    small_vector_ns::Test();
     //small_map_ns::Test();
     //recordtest::Test();
     //rcu::Test();

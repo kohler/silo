@@ -525,10 +525,10 @@ protected:
   // XXX: use parameterized typedef to avoid duplication
 
   // small types
-  typedef small_vector<
+  typedef local_vector<
     read_record_t,
     traits_type::read_set_expected_size> read_set_map_small;
-  typedef small_vector<
+  typedef local_vector<
     write_record_t,
     traits_type::write_set_expected_size> write_set_map_small;
   typedef small_unordered_map<
@@ -547,10 +547,10 @@ protected:
     traits_type::absent_set_expected_size> absent_set_map_static;
 
   // helper types for log writing
-  typedef small_vector<
+  typedef local_vector<
     uint32_t,
     traits_type::write_set_expected_size> write_set_u32_vec_small;
-  typedef static_vector<
+  typedef local_vector<
     uint32_t,
     traits_type::write_set_expected_size> write_set_u32_vec_static;
 

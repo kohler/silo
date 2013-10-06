@@ -2,7 +2,6 @@
 
 #include <string>
 #include <memory>
-#include "small_vector.h"
 
 // XXX: str arena hardcoded now to handle at most 1024 strings
 class str_arena {

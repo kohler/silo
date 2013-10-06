@@ -22,7 +22,6 @@
 #include "amd64.h"
 #include "rcu.h"
 #include "util.h"
-#include "small_vector.h"
 
 namespace private_ {
   template <typename T, typename P> struct u64manip;

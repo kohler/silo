@@ -23,7 +23,6 @@
 #include "amd64.h"
 #include "rcu.h"
 #include "util.h"
-#include "small_vector.h"
 
 #include "masstree/masstree_scan.hh"
 #include "masstree/masstree_insert.hh"
