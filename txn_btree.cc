@@ -4,7 +4,6 @@
 #include <atomic>
 
 #include "txn.h"
-#include "txn_proto1_impl.h"
 #include "txn_proto2_impl.h"
 #include "txn_btree.h"
 #include "typed_txn_btree.h"
