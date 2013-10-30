@@ -159,4 +159,15 @@ DO_STRUCT(stock_data, STOCK_DATA_KEY_FIELDS, STOCK_DATA_VALUE_FIELDS)
   y(inline_str_fixed<9>,w_zip)
 DO_STRUCT(warehouse, WAREHOUSE_KEY_FIELDS, WAREHOUSE_VALUE_FIELDS)
 
+struct tpcc_new_order_args {
+  uint warehouse_id;
+  uint districtID;
+  uint customerID;
+  uint numItems;
+  uint itemIDs[15];
+  uint supplierWarehouseIDs[15];
+  uint orderQuantities[15];
+  bool allLocal;
+};
+
 #endif

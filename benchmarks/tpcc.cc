@@ -478,6 +478,31 @@ public:
       buf[i] = (char)(base + (r.next() % 10));
     return buf;
   }
+
+  static inline void
+  choose_new_order_args(tpcc_new_order_args& a, fast_random& r,
+                        uint warehouse_id_start, uint warehouse_id_end,
+                        uint numWarehouses, int remote_item_pct) {
+    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
+    a.districtID = RandomNumber(r, 1, 10);
+    a.customerID = GetCustomerId(r);
+    a.numItems = RandomNumber(r, 5, 15);
+    a.allLocal = true;
+    for (uint i = 0; i < a.numItems; i++) {
+      a.itemIDs[i] = GetItemId(r);
+      if (likely(!remote_item_pct ||
+                 numWarehouses == 1 ||
+                 RandomNumber(r, 1, 100) > remote_item_pct)) {
+        a.supplierWarehouseIDs[i] = a.warehouse_id;
+      } else {
+        do {
+          a.supplierWarehouseIDs[i] = RandomNumber(r, 1, numWarehouses);
+        } while (a.supplierWarehouseIDs[i] == a.warehouse_id);
+        a.allLocal = false;
+      }
+      a.orderQuantities[i] = RandomNumber(r, 1, 10);
+    }
+  }
 };
 
 string tpcc_worker_mixin::NameTokens[] =
@@ -530,13 +555,21 @@ public:
   // XXX(stephentu): tune this
   static const size_t NMaxCustomerIdxScanElems = 512;
 
-  txn_result txn_new_order();
+  void choose_new_order_args(tpcc_new_order_args& a) {
+    tpcc_worker_mixin::choose_new_order_args
+      (a, this->r, warehouse_id_start, warehouse_id_end, NumWarehouses(),
+       g_new_order_remote_item_pct);
+  }
+
+  txn_result txn_new_order(tpcc_new_order_args& a);
 
   static txn_result
   TxnNewOrder(bench_worker *w)
   {
     ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
-    return static_cast<tpcc_worker *>(w)->txn_new_order();
+    tpcc_new_order_args a;
+    static_cast<tpcc_worker*>(w)->choose_new_order_args(a);
+    return static_cast<tpcc_worker *>(w)->txn_new_order(a);
   }
 
   txn_result txn_delivery();
@@ -1229,30 +1262,10 @@ static event_counter evt_tpcc_cross_partition_new_order_txns("tpcc_cross_partiti
 static event_counter evt_tpcc_cross_partition_payment_txns("tpcc_cross_partition_payment_txns");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_new_order()
+tpcc_worker::txn_new_order(tpcc_new_order_args& a)
 {
-  const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-  const uint districtID = RandomNumber(r, 1, 10);
-  const uint customerID = GetCustomerId(r);
-  const uint numItems = RandomNumber(r, 5, 15);
-  uint itemIDs[15], supplierWarehouseIDs[15], orderQuantities[15];
-  bool allLocal = true;
-  for (uint i = 0; i < numItems; i++) {
-    itemIDs[i] = GetItemId(r);
-    if (likely(g_disable_xpartition_txn ||
-               NumWarehouses() == 1 ||
-               RandomNumber(r, 1, 100) > g_new_order_remote_item_pct)) {
-      supplierWarehouseIDs[i] = warehouse_id;
-    } else {
-      do {
-       supplierWarehouseIDs[i] = RandomNumber(r, 1, NumWarehouses());
-      } while (supplierWarehouseIDs[i] == warehouse_id);
-      allLocal = false;
-    }
-    orderQuantities[i] = RandomNumber(r, 1, 10);
-  }
-  INVARIANT(!g_disable_xpartition_txn || allLocal);
-  if (!allLocal)
+  INVARIANT(!g_disable_xpartition_txn || a.allLocal);
+  if (!a.allLocal)
     ++evt_tpcc_cross_partition_new_order_txns;
 
   // XXX(stephentu): implement rollback
@@ -1282,16 +1295,16 @@ tpcc_worker::txn_new_order()
   scoped_str_arena s_arena(arena);
   scoped_multilock<spinlock> mlock;
   if (g_enable_partition_locks) {
-    if (allLocal) {
-      mlock.enq(LockForPartition(warehouse_id));
+    if (a.allLocal) {
+      mlock.enq(LockForPartition(a.warehouse_id));
     } else {
       small_unordered_map<unsigned int, bool, 64> lockset;
-      mlock.enq(LockForPartition(warehouse_id));
-      lockset[PartitionId(warehouse_id)] = 1;
-      for (uint i = 0; i < numItems; i++) {
-        if (lockset.find(PartitionId(supplierWarehouseIDs[i])) == lockset.end()) {
-          mlock.enq(LockForPartition(supplierWarehouseIDs[i]));
-          lockset[PartitionId(supplierWarehouseIDs[i])] = 1;
+      mlock.enq(LockForPartition(a.warehouse_id));
+      lockset[PartitionId(a.warehouse_id)] = 1;
+      for (uint i = 0; i < a.numItems; i++) {
+        if (lockset.find(PartitionId(a.supplierWarehouseIDs[i])) == lockset.end()) {
+          mlock.enq(LockForPartition(a.supplierWarehouseIDs[i]));
+          lockset[PartitionId(a.supplierWarehouseIDs[i])] = 1;
         }
       }
     }
@@ -1299,60 +1312,60 @@ tpcc_worker::txn_new_order()
   }
   try {
     ssize_t ret = 0;
-    const customer::key k_c(warehouse_id, districtID, customerID);
-    ALWAYS_ASSERT(tbl_customer(warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
+    const customer::key k_c(a.warehouse_id, a.districtID, a.customerID);
+    ALWAYS_ASSERT(tbl_customer(a.warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
     customer::value v_c_temp;
     const customer::value *v_c = Decode(obj_v, v_c_temp);
     checker::SanityCheckCustomer(&k_c, v_c);
 
-    const warehouse::key k_w(warehouse_id);
-    ALWAYS_ASSERT(tbl_warehouse(warehouse_id)->get(txn, Encode(obj_key0, k_w), obj_v));
+    const warehouse::key k_w(a.warehouse_id);
+    ALWAYS_ASSERT(tbl_warehouse(a.warehouse_id)->get(txn, Encode(obj_key0, k_w), obj_v));
     warehouse::value v_w_temp;
     const warehouse::value *v_w = Decode(obj_v, v_w_temp);
     checker::SanityCheckWarehouse(&k_w, v_w);
 
-    const district::key k_d(warehouse_id, districtID);
-    ALWAYS_ASSERT(tbl_district(warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
+    const district::key k_d(a.warehouse_id, a.districtID);
+    ALWAYS_ASSERT(tbl_district(a.warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
     district::value v_d_temp;
     const district::value *v_d = Decode(obj_v, v_d_temp);
     checker::SanityCheckDistrict(&k_d, v_d);
 
     const uint64_t my_next_o_id = g_new_order_fast_id_gen ?
-        FastNewOrderIdGen(warehouse_id, districtID) : v_d->d_next_o_id;
+        FastNewOrderIdGen(a.warehouse_id, a.districtID) : v_d->d_next_o_id;
 
-    const new_order::key k_no(warehouse_id, districtID, my_next_o_id);
+    const new_order::key k_no(a.warehouse_id, a.districtID, my_next_o_id);
     const new_order::value v_no;
     const size_t new_order_sz = Size(v_no);
-    tbl_new_order(warehouse_id)->insert(txn, Encode(str(), k_no), Encode(str(), v_no));
+    tbl_new_order(a.warehouse_id)->insert(txn, Encode(str(), k_no), Encode(str(), v_no));
     ret += new_order_sz;
 
     if (!g_new_order_fast_id_gen) {
       district::value v_d_new(*v_d);
       v_d_new.d_next_o_id++;
-      tbl_district(warehouse_id)->put(txn, Encode(str(), k_d), Encode(str(), v_d_new));
+      tbl_district(a.warehouse_id)->put(txn, Encode(str(), k_d), Encode(str(), v_d_new));
     }
 
-    const oorder::key k_oo(warehouse_id, districtID, k_no.no_o_id);
+    const oorder::key k_oo(a.warehouse_id, a.districtID, k_no.no_o_id);
     oorder::value v_oo;
-    v_oo.o_c_id = int32_t(customerID);
+    v_oo.o_c_id = int32_t(a.customerID);
     v_oo.o_carrier_id = 0; // seems to be ignored
-    v_oo.o_ol_cnt = int8_t(numItems);
-    v_oo.o_all_local = allLocal;
+    v_oo.o_ol_cnt = int8_t(a.numItems);
+    v_oo.o_all_local = a.allLocal;
     v_oo.o_entry_d = GetCurrentTimeMillis();
 
     const size_t oorder_sz = Size(v_oo);
-    tbl_oorder(warehouse_id)->insert(txn, Encode(str(), k_oo), Encode(str(), v_oo));
+    tbl_oorder(a.warehouse_id)->insert(txn, Encode(str(), k_oo), Encode(str(), v_oo));
     ret += oorder_sz;
 
-    const oorder_c_id_idx::key k_oo_idx(warehouse_id, districtID, customerID, k_no.no_o_id);
+    const oorder_c_id_idx::key k_oo_idx(a.warehouse_id, a.districtID, a.customerID, k_no.no_o_id);
     const oorder_c_id_idx::value v_oo_idx(0);
 
-    tbl_oorder_c_id_idx(warehouse_id)->insert(txn, Encode(str(), k_oo_idx), Encode(str(), v_oo_idx));
+    tbl_oorder_c_id_idx(a.warehouse_id)->insert(txn, Encode(str(), k_oo_idx), Encode(str(), v_oo_idx));
 
-    for (uint ol_number = 1; ol_number <= numItems; ol_number++) {
-      const uint ol_supply_w_id = supplierWarehouseIDs[ol_number - 1];
-      const uint ol_i_id = itemIDs[ol_number - 1];
-      const uint ol_quantity = orderQuantities[ol_number - 1];
+    for (uint ol_number = 1; ol_number <= a.numItems; ol_number++) {
+      const uint ol_supply_w_id = a.supplierWarehouseIDs[ol_number - 1];
+      const uint ol_i_id = a.itemIDs[ol_number - 1];
+      const uint ol_quantity = a.orderQuantities[ol_number - 1];
 
       const item::key k_i(ol_i_id);
       ALWAYS_ASSERT(tbl_item(1)->get(txn, Encode(obj_key0, k_i), obj_v));
@@ -1372,11 +1385,11 @@ tpcc_worker::txn_new_order()
       else
         v_s_new.s_quantity += -int32_t(ol_quantity) + 91;
       v_s_new.s_ytd += ol_quantity;
-      v_s_new.s_remote_cnt += (ol_supply_w_id == warehouse_id) ? 0 : 1;
+      v_s_new.s_remote_cnt += (ol_supply_w_id == a.warehouse_id) ? 0 : 1;
 
       tbl_stock(ol_supply_w_id)->put(txn, Encode(str(), k_s), Encode(str(), v_s_new));
 
-      const order_line::key k_ol(warehouse_id, districtID, k_no.no_o_id, ol_number);
+      const order_line::key k_ol(a.warehouse_id, a.districtID, k_no.no_o_id, ol_number);
       order_line::value v_ol;
       v_ol.ol_i_id = int32_t(ol_i_id);
       v_ol.ol_delivery_d = 0; // not delivered yet
@@ -1385,7 +1398,7 @@ tpcc_worker::txn_new_order()
       v_ol.ol_quantity = int8_t(ol_quantity);
 
       const size_t order_line_sz = Size(v_ol);
-      tbl_order_line(warehouse_id)->insert(txn, Encode(str(), k_ol), Encode(str(), v_ol));
+      tbl_order_line(a.warehouse_id)->insert(txn, Encode(str(), k_ol), Encode(str(), v_ol));
       ret += order_line_sz;
     }
 
@@ -2193,6 +2206,8 @@ tpcc_do_test(abstract_db *db, int argc, char **argv)
     cerr << "WARNING: --new-order-remote-item-pct given with --disable-cross-partition-transactions" << endl;
     cerr << "  --new-order-remote-item-pct will have no effect" << endl;
   }
+  if (g_disable_xpartition_txn)
+    g_new_order_remote_item_pct = 0;
 
   if (verbose) {
     cerr << "tpcc settings:" << endl;
