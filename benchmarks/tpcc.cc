@@ -27,6 +27,9 @@
 using namespace std;
 using namespace util;
 
+#include "../masstree/msgpack.hh"
+using lcdf::Json;
+
 #define TPCC_TABLE_LIST(x) \
   x(customer) \
   x(customer_name_idx) \
@@ -567,14 +570,8 @@ protected:
     return *arena.next();
   }
 
-private:
-  union {
-    tpcc_new_order_args new_order;
-    tpcc_delivery_args delivery;
-    tpcc_payment_args payment;
-    tpcc_order_status_args order_status;
-    tpcc_stock_level_args stock_level;
-  } args;
+ protected:
+  tpcc_args_union args;
 
  private:
   int32_t last_no_o_ids[10]; // XXX(stephentu): hack
@@ -1868,6 +1865,129 @@ tpcc_worker::txn_stock_level()
     db->abort_txn(txn);
   }
   return txn_result(false, 0);
+}
+
+static __attribute__((used)) int
+parse_json_argument(const Json& j, tpcc_args_union& args)
+{
+  if (!j.is_a() || j.size() < 2 || !j[0].is_i() || !j[1].is_i())
+    return -1;
+  switch (j[0].as_i()) {
+  case NewOrderCounter: {
+    if (j.size() < 7 || !j[2].is_i() || !j[3].is_i() || !j[4].is_i()
+        || !j[5].is_a() || j[5].size() % 3 != 0 || !j[6].is_b())
+      return -1;
+    tpcc_new_order_args& a = args.new_order;
+    a.warehouse_id = j[2].as_u();
+    a.districtID = j[3].as_u();
+    a.customerID = j[4].as_u();
+    a.numItems = j[5].size();
+    const Json* items = j[5].array_data();
+    for (uint32_t i = 0; i != a.numItems; ++i, items += 3) {
+      if (!items[0].is_i() || !items[1].is_i() || !items[2].is_i())
+        return -1;
+      a.itemIDs[i] = items[0].as_i();
+      a.supplierWarehouseIDs[i] = items[1].as_i();
+      a.orderQuantities[i] = items[2].as_i();
+    }
+    a.allLocal = j[6].as_b();
+    return NewOrderCounter;
+  }
+  case PaymentCounter: {
+    if (j.size() < 7 || !j[2].is_i() || !j[3].is_i() || !j[4].is_i()
+        || !j[5].is_i() || !j[6].is_d())
+      return -1;
+    tpcc_payment_args& a = args.payment;
+    a.warehouse_id = j[2].as_u();
+    a.districtID = j[3].as_u();
+    a.customerDistrictID = j[4].as_u();
+    a.customerWarehouseID = j[5].as_u();
+    a.paymentAmount = j[6].as_d();
+    return PaymentCounter;
+  }
+  case DeliveryCounter: {
+    if (j.size() < 4 || !j[2].is_i() || !j[3].is_i())
+      return -1;
+    tpcc_delivery_args& a = args.delivery;
+    a.warehouse_id = j[2].as_u();
+    a.o_carrier_id = j[3].as_u();
+    return DeliveryCounter;
+  }
+  case OrderStatusCounter: {
+    if (j.size() < 4 || !j[2].is_i() || !j[3].is_i())
+      return -1;
+    tpcc_order_status_args& a = args.order_status;
+    a.warehouse_id = j[2].as_u();
+    a.districtID = j[3].as_u();
+    return OrderStatusCounter;
+  }
+  case StockLevelCounter: {
+    if (j.size() < 5 || !j[2].is_i() || !j[3].is_i() || !j[4].is_i())
+      return -1;
+    tpcc_stock_level_args& a = args.stock_level;
+    a.warehouse_id = j[2].as_u();
+    a.threshold = j[3].as_u();
+    a.districtID = j[4].as_u();
+    return StockLevelCounter;
+  }
+  default:
+    return -1;
+  }
+}
+
+template <typename T>
+static void
+unparse_json_argument(msgpack::unparser<T>& up,
+                      unsigned long seq, const tpcc_new_order_args& a)
+{
+  up << msgpack::array_marker(7)
+     << (int) NewOrderCounter << seq
+     << a.warehouse_id << a.districtID << a.customerID
+     << msgpack::array_marker(a.numItems * 3);
+  for (int i = 0; i != a.numItems; ++i)
+    up << a.itemIDs[i] << a.supplierWarehouseIDs[i] << a.orderQuantities[i];
+  up << a.allLocal;
+}
+
+template <typename T>
+static void
+unparse_json_argument(msgpack::unparser<T>& up,
+                      unsigned long seq, const tpcc_delivery_args& a)
+{
+  up << msgpack::array_marker(4)
+     << (int) DeliveryCounter << seq
+     << a.warehouse_id << a.o_carrier_id;
+}
+
+template <typename T>
+static void
+unparse_json_argument(msgpack::unparser<T>& up,
+                      unsigned long seq, const tpcc_payment_args& a)
+{
+  up << msgpack::array_marker(7)
+     << (int) PaymentCounter << seq
+     << a.warehouse_id << a.districtID << a.customerDistrictID
+     << a.customerWarehouseID << a.paymentAmount;
+}
+
+template <typename T>
+static void
+unparse_json_argument(msgpack::unparser<T>& up,
+                      unsigned long seq, const tpcc_order_status_args& a)
+{
+  up << msgpack::array_marker(4)
+     << (int) OrderStatusCounter << seq
+     << a.warehouse_id << a.districtID;
+}
+
+template <typename T>
+static void
+unparse_json_argument(msgpack::unparser<T>& up,
+                      unsigned long seq, const tpcc_stock_level_args& a)
+{
+  up << msgpack::array_marker(5)
+     << (int) StockLevelCounter << seq
+     << a.warehouse_id << a.threshold << a.districtID;
 }
 
 template <typename T>

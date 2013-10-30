@@ -40,6 +40,14 @@ struct tpcc_stock_level_args {
   uint districtID;
 };
 
+union tpcc_args_union {
+  tpcc_new_order_args new_order;
+  tpcc_delivery_args delivery;
+  tpcc_payment_args payment;
+  tpcc_order_status_args order_status;
+  tpcc_stock_level_args stock_level;
+};
+
 struct tpcc_generator {
   uint warehouse_id_start;
   uint warehouse_id_end;
