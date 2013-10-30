@@ -485,76 +485,82 @@ public:
 
   txn_result txn_new_order(tpcc_new_order_args& a);
 
-  static txn_result
-  TxnNewOrder(bench_worker *w)
-  {
-    ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
+  struct new_order_caller {
     tpcc_new_order_args a;
-    static_cast<tpcc_worker*>(w)->choose_new_order_args(a, w->r);
-    return static_cast<tpcc_worker *>(w)->txn_new_order(a);
-  }
+    txn_result operator()(bench_worker* w) {
+      ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
+      return static_cast<tpcc_worker*>(w)->txn_new_order(a);
+    }
+  };
 
 
   txn_result txn_delivery(tpcc_delivery_args& a);
 
-  static txn_result
-  TxnDelivery(bench_worker *w)
-  {
-    ANON_REGION("TxnDelivery:", &tpcc_txn_cg);
+  struct delivery_caller {
     tpcc_delivery_args a;
-    static_cast<tpcc_worker*>(w)->choose_delivery_args(a, w->r);
-    return static_cast<tpcc_worker *>(w)->txn_delivery(a);
-  }
+    txn_result operator()(bench_worker* w) {
+      ANON_REGION("TxnDelivery:", &tpcc_txn_cg);
+      return static_cast<tpcc_worker*>(w)->txn_delivery(a);
+    }
+  };
 
 
   txn_result txn_payment(tpcc_payment_args& a);
 
-  static txn_result
-  TxnPayment(bench_worker *w)
-  {
-    ANON_REGION("TxnPayment:", &tpcc_txn_cg);
+  struct payment_caller {
     tpcc_payment_args a;
-    static_cast<tpcc_worker*>(w)->choose_payment_args(a, w->r);
-    return static_cast<tpcc_worker *>(w)->txn_payment(a);
-  }
+    txn_result operator()(bench_worker* w) {
+      ANON_REGION("TxnPayment:", &tpcc_txn_cg);
+      return static_cast<tpcc_worker*>(w)->txn_payment(a);
+    }
+  };
 
 
   txn_result txn_order_status(tpcc_order_status_args& a);
 
-  static txn_result
-  TxnOrderStatus(bench_worker *w)
-  {
-    ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
+  struct order_status_caller {
     tpcc_order_status_args a;
-    static_cast<tpcc_worker*>(w)->choose_order_status_args(a, w->r);
-    return static_cast<tpcc_worker *>(w)->txn_order_status(a);
-  }
+    txn_result operator()(bench_worker* w) {
+      ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
+      return static_cast<tpcc_worker*>(w)->txn_order_status(a);
+    }
+  };
 
 
   txn_result txn_stock_level(tpcc_stock_level_args& a);
 
-  static txn_result
-  TxnStockLevel(bench_worker *w)
-  {
-    ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
+  struct stock_level_caller {
     tpcc_stock_level_args a;
-    static_cast<tpcc_worker*>(w)->choose_stock_level_args(a, w->r);
-    return static_cast<tpcc_worker *>(w)->txn_stock_level(a);
-  }
+    txn_result operator()(bench_worker* w) {
+      ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
+      return static_cast<tpcc_worker*>(w)->txn_stock_level(a);
+    }
+  };
 
 
   virtual void go() OVERRIDE {
     double which = this->r.next_uniform();
-    if (which < g_txn_workload_fraction[NewOrderCounter])
-      execute_with_retry(TxnNewOrder, NewOrderCounter);
-    else if (which < g_txn_workload_fraction[PaymentCounter])
-      execute_with_retry(TxnPayment, PaymentCounter);
-    else if (which < g_txn_workload_fraction[DeliveryCounter])
-      execute_with_retry(TxnDelivery, DeliveryCounter);
-    else if (which < g_txn_workload_fraction[OrderStatusCounter])
-      execute_with_retry(TxnOrderStatus, OrderStatusCounter);
-    else
-      execute_with_retry(TxnStockLevel, StockLevelCounter);
+    if (which < g_txn_workload_fraction[NewOrderCounter]) {
+      new_order_caller c;
+      choose_new_order_args(c.a, r);
+      execute_with_retry(c, NewOrderCounter);
+    } else if (which < g_txn_workload_fraction[PaymentCounter]) {
+      payment_caller c;
+      choose_payment_args(c.a, r);
+      execute_with_retry(c, PaymentCounter);
+    } else if (which < g_txn_workload_fraction[DeliveryCounter]) {
+      delivery_caller c;
+      choose_delivery_args(c.a, r);
+      execute_with_retry(c, DeliveryCounter);
+    } else if (which < g_txn_workload_fraction[OrderStatusCounter]) {
+      order_status_caller c;
+      choose_order_status_args(c.a, r);
+      execute_with_retry(c, OrderStatusCounter);
+    } else {
+      stock_level_caller c;
+      choose_stock_level_args(c.a, r);
+      execute_with_retry(c, StockLevelCounter);
+    }
   }
 
 protected:
