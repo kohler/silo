@@ -87,6 +87,10 @@ public:
     scoped_db_thread_ctx ctx(db, true);
     load();
   }
+  inline int uniform(int min, int max) {
+    return util::check_between_inclusive
+      ((int) (r.next_uniform() * (max - min + 1) + min), min, max);
+  }
 protected:
   inline void *txn_buf() { return (void *) txn_obj_buf.data(); }
 
@@ -172,6 +176,11 @@ public:
 
   static event_avg_counter evt_avg_abort_spins;
 
+  inline int uniform(int min, int max) {
+    return util::check_between_inclusive
+      ((int) (r.next_uniform() * (max - min + 1) + min), min, max);
+  }
+
 protected:
 
   virtual void on_run_setup() {}
@@ -180,7 +189,9 @@ protected:
 
   unsigned int worker_id;
   bool set_core_id;
+public:
   util::fast_random r;
+protected:
   abstract_db *const db;
   std::map<std::string, abstract_ordered_index *> open_tables;
   spin_barrier *const barrier_a;

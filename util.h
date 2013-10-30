@@ -208,6 +208,15 @@ slow_round_down(T x, T q)
   return x - r;
 }
 
+template <typename T>
+static inline ALWAYS_INLINE T
+check_between_inclusive(T v, T lower, T upper)
+{
+  INVARIANT(v >= lower);
+  INVARIANT(v <= upper);
+  return v;
+}
+
 // not thread-safe
 //
 // taken from java:

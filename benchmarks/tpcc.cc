@@ -23,6 +23,7 @@
 
 #include "bench.h"
 #include "tpcc.h"
+#include "tpcc_interface.h"
 using namespace std;
 using namespace util;
 
@@ -44,26 +45,6 @@ static inline ALWAYS_INLINE size_t
 NumWarehouses()
 {
   return (size_t) scale_factor;
-}
-
-// config constants
-
-static constexpr inline ALWAYS_INLINE size_t
-NumItems()
-{
-  return 100000;
-}
-
-static constexpr inline ALWAYS_INLINE size_t
-NumDistrictsPerWarehouse()
-{
-  return 10;
-}
-
-static constexpr inline ALWAYS_INLINE size_t
-NumCustomersPerDistrict()
-{
-  return 3000;
 }
 
 // T must implement lock()/unlock(). Both must *not* throw exceptions
@@ -185,9 +166,10 @@ static inline atomic<uint64_t> &
 NewOrderIdHolder(unsigned warehouse, unsigned district)
 {
   INVARIANT(warehouse >= 1 && warehouse <= NumWarehouses());
-  INVARIANT(district >= 1 && district <= NumDistrictsPerWarehouse());
+  INVARIANT(district >= 1 && district <= tpcc_generator::NumDistrictsPerWarehouse());
   const unsigned idx =
-    (warehouse - 1) * NumDistrictsPerWarehouse() + (district - 1);
+    (warehouse - 1) * tpcc_generator::NumDistrictsPerWarehouse()
+    + (district - 1);
   return g_district_ids[idx].elem;
 }
 
@@ -345,53 +327,6 @@ public:
 
   // utils for generating random #s and strings
 
-  static inline ALWAYS_INLINE int
-  CheckBetweenInclusive(int v, int lower, int upper)
-  {
-    INVARIANT(v >= lower);
-    INVARIANT(v <= upper);
-    return v;
-  }
-
-  static inline ALWAYS_INLINE int
-  RandomNumber(fast_random &r, int min, int max)
-  {
-    return CheckBetweenInclusive((int) (r.next_uniform() * (max - min + 1) + min), min, max);
-  }
-
-  static inline ALWAYS_INLINE int
-  NonUniformRandom(fast_random &r, int A, int C, int min, int max)
-  {
-    return (((RandomNumber(r, 0, A) | RandomNumber(r, min, max)) + C) % (max - min + 1)) + min;
-  }
-
-  static inline ALWAYS_INLINE int
-  GetItemId(fast_random &r)
-  {
-    return CheckBetweenInclusive(
-        g_uniform_item_dist ?
-          RandomNumber(r, 1, NumItems()) :
-          NonUniformRandom(r, 8191, 7911, 1, NumItems()),
-        1, NumItems());
-  }
-
-  static inline ALWAYS_INLINE int
-  GetCustomerId(fast_random &r)
-  {
-    return CheckBetweenInclusive(NonUniformRandom(r, 1023, 259, 1, NumCustomersPerDistrict()), 1, NumCustomersPerDistrict());
-  }
-
-  // pick a number between [start, end)
-  static inline ALWAYS_INLINE unsigned
-  PickWarehouseId(fast_random &r, unsigned start, unsigned end)
-  {
-    INVARIANT(start < end);
-    const unsigned diff = end - start;
-    if (diff == 1)
-      return start;
-    return (r.next() % diff) + start;
-  }
-
   static string NameTokens[];
 
   // all tokens are at most 5 chars long
@@ -431,13 +366,13 @@ public:
   static inline ALWAYS_INLINE string
   GetNonUniformCustomerLastNameLoad(fast_random &r)
   {
-    return GetCustomerLastName(r, NonUniformRandom(r, 255, 157, 0, 999));
+    return GetCustomerLastName(r, tpcc_generator::NonUniformRandom(r, 255, 157, 0, 999));
   }
 
   static inline ALWAYS_INLINE size_t
   GetNonUniformCustomerLastNameRun(uint8_t *buf, fast_random &r)
   {
-    return GetCustomerLastName(buf, r, NonUniformRandom(r, 255, 223, 0, 999));
+    return GetCustomerLastName(buf, r, tpcc_generator::NonUniformRandom(r, 255, 223, 0, 999));
   }
 
   static inline ALWAYS_INLINE size_t
@@ -449,7 +384,7 @@ public:
   static inline ALWAYS_INLINE string
   GetNonUniformCustomerLastNameRun(fast_random &r)
   {
-    return GetCustomerLastName(r, NonUniformRandom(r, 255, 223, 0, 999));
+    return GetCustomerLastName(r, tpcc_generator::NonUniformRandom(r, 255, 223, 0, 999));
   }
 
   // following oltpbench, we really generate strings of len - 1...
@@ -483,73 +418,6 @@ public:
       buf[i] = (char)(base + (r.next() % 10));
     return buf;
   }
-
-  static inline void
-  choose_new_order_args(tpcc_new_order_args& a, fast_random& r,
-                        uint warehouse_id_start, uint warehouse_id_end,
-                        uint numWarehouses, int remote_item_pct) {
-    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-    a.districtID = RandomNumber(r, 1, 10);
-    a.customerID = GetCustomerId(r);
-    a.numItems = RandomNumber(r, 5, 15);
-    a.allLocal = true;
-    for (uint i = 0; i < a.numItems; i++) {
-      a.itemIDs[i] = GetItemId(r);
-      if (likely(!remote_item_pct ||
-                 numWarehouses == 1 ||
-                 RandomNumber(r, 1, 100) > remote_item_pct)) {
-        a.supplierWarehouseIDs[i] = a.warehouse_id;
-      } else {
-        do {
-          a.supplierWarehouseIDs[i] = RandomNumber(r, 1, numWarehouses);
-        } while (a.supplierWarehouseIDs[i] == a.warehouse_id);
-        a.allLocal = false;
-      }
-      a.orderQuantities[i] = RandomNumber(r, 1, 10);
-    }
-  }
-
-  static inline void
-  choose_delivery_args(tpcc_delivery_args& a, fast_random& r,
-                       uint warehouse_id_start, uint warehouse_id_end) {
-    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-    a.o_carrier_id = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-  }
-
-  static inline void
-  choose_payment_args(tpcc_payment_args& a, fast_random& r,
-                      uint warehouse_id_start, uint warehouse_id_end,
-                      uint numWarehouses, bool disable_xpartition_txn) {
-    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-    if (likely(disable_xpartition_txn ||
-               numWarehouses == 1 ||
-               RandomNumber(r, 1, 100) <= 85)) {
-      a.customerDistrictID = a.districtID;
-      a.customerWarehouseID = a.warehouse_id;
-    } else {
-      a.customerDistrictID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-      do {
-        a.customerWarehouseID = RandomNumber(r, 1, numWarehouses);
-      } while (a.customerWarehouseID == a.warehouse_id);
-    }
-    a.paymentAmount = (float) (RandomNumber(r, 100, 500000) / 100.0);
-  }
-
-  static inline void
-  choose_order_status_args(tpcc_order_status_args& a, fast_random& r,
-                           uint warehouse_id_start, uint warehouse_id_end) {
-    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-  }
-
-  static inline void
-  choose_stock_level_args(tpcc_stock_level_args& a, fast_random& r,
-                          uint warehouse_id_start, uint warehouse_id_end) {
-    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-    a.threshold = RandomNumber(r, 10, 20);
-    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-  }
 };
 
 string tpcc_worker_mixin::NameTokens[] =
@@ -568,7 +436,8 @@ string tpcc_worker_mixin::NameTokens[] =
 
 STATIC_COUNTER_DECL(scopedperf::tsc_ctr, tpcc_txn, tpcc_txn_cg)
 
-class tpcc_worker : public bench_worker, public tpcc_worker_mixin {
+class tpcc_worker : public bench_worker, public tpcc_worker_mixin,
+                    public tpcc_generator {
 public:
   // resp for [warehouse_id_start, warehouse_id_end)
   tpcc_worker(unsigned int worker_id,
@@ -579,9 +448,7 @@ public:
               uint warehouse_id_start, uint warehouse_id_end)
     : bench_worker(worker_id, true, seed, db,
                    open_tables, barrier_a, barrier_b),
-      tpcc_worker_mixin(partitions),
-      warehouse_id_start(warehouse_id_start),
-      warehouse_id_end(warehouse_id_end)
+      tpcc_worker_mixin(partitions)
   {
     INVARIANT(warehouse_id_start >= 1);
     INVARIANT(warehouse_id_start <= NumWarehouses());
@@ -603,17 +470,18 @@ public:
     add_counter(DeliveryCounter, "Delivery");
     add_counter(OrderStatusCounter, "OrderStatus");
     add_counter(StockLevelCounter, "StockLevel");
+
+    this->warehouse_id_start = warehouse_id_start;
+    this->warehouse_id_end = warehouse_id_end;
+    this->numWarehouses = NumWarehouses();
+    this->remote_item_pct = g_new_order_remote_item_pct;
+    this->disable_xpartition_txn = g_disable_xpartition_txn;
+    this->uniform_item_dist = g_uniform_item_dist;
   }
 
   // XXX(stephentu): tune this
   static const size_t NMaxCustomerIdxScanElems = 512;
 
-
-  void choose_new_order_args(tpcc_new_order_args& a) {
-    tpcc_worker_mixin::choose_new_order_args
-      (a, this->r, warehouse_id_start, warehouse_id_end, NumWarehouses(),
-       g_new_order_remote_item_pct);
-  }
 
   txn_result txn_new_order(tpcc_new_order_args& a);
 
@@ -622,15 +490,10 @@ public:
   {
     ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
     tpcc_new_order_args a;
-    static_cast<tpcc_worker*>(w)->choose_new_order_args(a);
+    static_cast<tpcc_worker*>(w)->choose_new_order_args(a, w->r);
     return static_cast<tpcc_worker *>(w)->txn_new_order(a);
   }
 
-
-  void choose_delivery_args(tpcc_delivery_args& a) {
-    tpcc_worker_mixin::choose_delivery_args
-      (a, this->r, warehouse_id_start, warehouse_id_end);
-  }
 
   txn_result txn_delivery(tpcc_delivery_args& a);
 
@@ -639,16 +502,10 @@ public:
   {
     ANON_REGION("TxnDelivery:", &tpcc_txn_cg);
     tpcc_delivery_args a;
-    static_cast<tpcc_worker*>(w)->choose_delivery_args(a);
+    static_cast<tpcc_worker*>(w)->choose_delivery_args(a, w->r);
     return static_cast<tpcc_worker *>(w)->txn_delivery(a);
   }
 
-
-  void choose_payment_args(tpcc_payment_args& a) {
-    tpcc_worker_mixin::choose_payment_args
-      (a, this->r, warehouse_id_start, warehouse_id_end, NumWarehouses(),
-       g_disable_xpartition_txn);
-  }
 
   txn_result txn_payment(tpcc_payment_args& a);
 
@@ -657,15 +514,10 @@ public:
   {
     ANON_REGION("TxnPayment:", &tpcc_txn_cg);
     tpcc_payment_args a;
-    static_cast<tpcc_worker*>(w)->choose_payment_args(a);
+    static_cast<tpcc_worker*>(w)->choose_payment_args(a, w->r);
     return static_cast<tpcc_worker *>(w)->txn_payment(a);
   }
 
-
-  void choose_order_status_args(tpcc_order_status_args& a) {
-    tpcc_worker_mixin::choose_order_status_args
-      (a, this->r, warehouse_id_start, warehouse_id_end);
-  }
 
   txn_result txn_order_status(tpcc_order_status_args& a);
 
@@ -674,15 +526,10 @@ public:
   {
     ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
     tpcc_order_status_args a;
-    static_cast<tpcc_worker*>(w)->choose_order_status_args(a);
+    static_cast<tpcc_worker*>(w)->choose_order_status_args(a, w->r);
     return static_cast<tpcc_worker *>(w)->txn_order_status(a);
   }
 
-
-  void choose_stock_level_args(tpcc_stock_level_args& a) {
-    tpcc_worker_mixin::choose_stock_level_args
-      (a, this->r, warehouse_id_start, warehouse_id_end);
-  }
 
   txn_result txn_stock_level(tpcc_stock_level_args& a);
 
@@ -691,7 +538,7 @@ public:
   {
     ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
     tpcc_stock_level_args a;
-    static_cast<tpcc_worker*>(w)->choose_stock_level_args(a);
+    static_cast<tpcc_worker*>(w)->choose_stock_level_args(a, w->r);
     return static_cast<tpcc_worker *>(w)->txn_stock_level(a);
   }
 
@@ -730,8 +577,6 @@ protected:
   }
 
 private:
-  const uint warehouse_id_start;
-  const uint warehouse_id_end;
   int32_t last_no_o_ids[10]; // XXX(stephentu): hack
 
   // some scratch buffer space
@@ -762,16 +607,16 @@ protected:
       for (uint i = 1; i <= NumWarehouses(); i++) {
         const warehouse::key k(i);
 
-        const string w_name = RandomStr(r, RandomNumber(r, 6, 10));
-        const string w_street_1 = RandomStr(r, RandomNumber(r, 10, 20));
-        const string w_street_2 = RandomStr(r, RandomNumber(r, 10, 20));
-        const string w_city = RandomStr(r, RandomNumber(r, 10, 20));
+        const string w_name = RandomStr(r, uniform(6, 10));
+        const string w_street_1 = RandomStr(r, uniform(10, 20));
+        const string w_street_2 = RandomStr(r, uniform(10, 20));
+        const string w_city = RandomStr(r, uniform(10, 20));
         const string w_state = RandomStr(r, 3);
         const string w_zip = "123456789";
 
         warehouse::value v;
         v.w_ytd = 300000;
-        v.w_tax = (float) RandomNumber(r, 0, 2000) / 10000.0;
+        v.w_tax = (float) uniform(0, 2000) / 10000.0;
         v.w_name.assign(w_name);
         v.w_street_1.assign(w_street_1);
         v.w_street_2.assign(w_street_2);
@@ -832,24 +677,24 @@ protected:
     void *txn = db->new_txn(txn_flags, arena, txn_buf());
     uint64_t total_sz = 0;
     try {
-      for (uint i = 1; i <= NumItems(); i++) {
+      for (uint i = 1; i <= tpcc_generator::NumItems(); i++) {
         // items don't "belong" to a certain warehouse, so no pinning
         const item::key k(i);
 
         item::value v;
-        const string i_name = RandomStr(r, RandomNumber(r, 14, 24));
+        const string i_name = RandomStr(r, uniform(14, 24));
         v.i_name.assign(i_name);
-        v.i_price = (float) RandomNumber(r, 100, 10000) / 100.0;
-        const int len = RandomNumber(r, 26, 50);
-        if (RandomNumber(r, 1, 100) > 10) {
+        v.i_price = (float) uniform(100, 10000) / 100.0;
+        const int len = uniform(26, 50);
+        if (uniform(1, 100) > 10) {
           const string i_data = RandomStr(r, len);
           v.i_data.assign(i_data);
         } else {
-          const int startOriginal = RandomNumber(r, 2, (len - 8));
+          const int startOriginal = uniform(2, (len - 8));
           const string i_data = RandomStr(r, startOriginal + 1) + "ORIGINAL" + RandomStr(r, len - startOriginal - 7);
           v.i_data.assign(i_data);
         }
-        v.i_im_id = RandomNumber(r, 1, 10000);
+        v.i_im_id = uniform(1, 10000);
 
         checker::SanityCheckItem(&k, &v);
         const size_t sz = Size(v);
@@ -870,7 +715,8 @@ protected:
     if (verbose) {
       cerr << "[INFO] finished loading item" << endl;
       cerr << "[INFO]   * average item record length: "
-           << (double(total_sz)/double(NumItems())) << " bytes" << endl;
+           << (double(total_sz)/double(tpcc_generator::NumItems()))
+           << " bytes" << endl;
     }
   }
 };
@@ -905,8 +751,8 @@ protected:
 
     for (uint w = w_start; w <= w_end; w++) {
       const size_t batchsize =
-        (db->txn_max_batch_size() == -1) ? NumItems() : db->txn_max_batch_size();
-      const size_t nbatches = (batchsize > NumItems()) ? 1 : (NumItems() / batchsize);
+        (db->txn_max_batch_size() == -1) ? tpcc_generator::NumItems() : db->txn_max_batch_size();
+      const size_t nbatches = (batchsize > tpcc_generator::NumItems()) ? 1 : (tpcc_generator::NumItems() / batchsize);
 
       if (pin_cpus)
         PinToWarehouseId(w);
@@ -915,24 +761,24 @@ protected:
         scoped_str_arena s_arena(arena);
         void * const txn = db->new_txn(txn_flags, arena, txn_buf());
         try {
-          const size_t iend = std::min((b + 1) * batchsize + 1, NumItems());
+          const size_t iend = std::min((b + 1) * batchsize + 1, tpcc_generator::NumItems());
           for (uint i = (b * batchsize + 1); i <= iend; i++) {
             const stock::key k(w, i);
             const stock_data::key k_data(w, i);
 
             stock::value v;
-            v.s_quantity = RandomNumber(r, 10, 100);
+            v.s_quantity = uniform(10, 100);
             v.s_ytd = 0;
             v.s_order_cnt = 0;
             v.s_remote_cnt = 0;
 
             stock_data::value v_data;
-            const int len = RandomNumber(r, 26, 50);
-            if (RandomNumber(r, 1, 100) > 10) {
+            const int len = uniform(26, 50);
+            if (uniform(1, 100) > 10) {
               const string s_data = RandomStr(r, len);
               v_data.s_data.assign(s_data);
             } else {
-              const int startOriginal = RandomNumber(r, 2, (len - 8));
+              const int startOriginal = uniform(2, (len - 8));
               const string s_data = RandomStr(r, startOriginal + 1) + "ORIGINAL" + RandomStr(r, len - startOriginal - 7);
               v_data.s_data.assign(s_data);
             }
@@ -1009,17 +855,17 @@ protected:
       for (uint w = 1; w <= NumWarehouses(); w++) {
         if (pin_cpus)
           PinToWarehouseId(w);
-        for (uint d = 1; d <= NumDistrictsPerWarehouse(); d++, cnt++) {
+        for (uint d = 1; d <= tpcc_generator::NumDistrictsPerWarehouse(); d++, cnt++) {
           const district::key k(w, d);
 
           district::value v;
           v.d_ytd = 30000;
-          v.d_tax = (float) (RandomNumber(r, 0, 2000) / 10000.0);
+          v.d_tax = (float) (uniform(0, 2000) / 10000.0);
           v.d_next_o_id = 3001;
-          v.d_name.assign(RandomStr(r, RandomNumber(r, 6, 10)));
-          v.d_street_1.assign(RandomStr(r, RandomNumber(r, 10, 20)));
-          v.d_street_2.assign(RandomStr(r, RandomNumber(r, 10, 20)));
-          v.d_city.assign(RandomStr(r, RandomNumber(r, 10, 20)));
+          v.d_name.assign(RandomStr(r, uniform(6, 10)));
+          v.d_street_1.assign(RandomStr(r, uniform(10, 20)));
+          v.d_street_2.assign(RandomStr(r, uniform(10, 20)));
+          v.d_city.assign(RandomStr(r, uniform(10, 20)));
           v.d_state.assign(RandomStr(r, 3));
           v.d_zip.assign("123456789");
 
@@ -1077,10 +923,10 @@ protected:
       NumWarehouses() : static_cast<uint>(warehouse_id);
     const size_t batchsize =
       (db->txn_max_batch_size() == -1) ?
-        NumCustomersPerDistrict() : db->txn_max_batch_size();
+        tpcc_generator::NumCustomersPerDistrict() : db->txn_max_batch_size();
     const size_t nbatches =
-      (batchsize > NumCustomersPerDistrict()) ?
-        1 : (NumCustomersPerDistrict() / batchsize);
+      (batchsize > tpcc_generator::NumCustomersPerDistrict()) ?
+        1 : (tpcc_generator::NumCustomersPerDistrict() / batchsize);
     cerr << "num batches: " << nbatches << endl;
 
     uint64_t total_sz = 0;
@@ -1088,20 +934,20 @@ protected:
     for (uint w = w_start; w <= w_end; w++) {
       if (pin_cpus)
         PinToWarehouseId(w);
-      for (uint d = 1; d <= NumDistrictsPerWarehouse(); d++) {
+      for (uint d = 1; d <= tpcc_generator::NumDistrictsPerWarehouse(); d++) {
         for (uint batch = 0; batch < nbatches;) {
           scoped_str_arena s_arena(arena);
           void * const txn = db->new_txn(txn_flags, arena, txn_buf());
           const size_t cstart = batch * batchsize;
-          const size_t cend = std::min((batch + 1) * batchsize, NumCustomersPerDistrict());
+          const size_t cend = std::min((batch + 1) * batchsize, tpcc_generator::NumCustomersPerDistrict());
           try {
             for (uint cidx0 = cstart; cidx0 < cend; cidx0++) {
               const uint c = cidx0 + 1;
               const customer::key k(w, d, c);
 
               customer::value v;
-              v.c_discount = (float) (RandomNumber(r, 1, 5000) / 10000.0);
-              if (RandomNumber(r, 1, 100) <= 10)
+              v.c_discount = (float) (uniform(1, 5000) / 10000.0);
+              if (uniform(1, 100) <= 10)
                 v.c_credit.assign("BC");
               else
                 v.c_credit.assign("GC");
@@ -1111,7 +957,7 @@ protected:
               else
                 v.c_last.assign(GetNonUniformCustomerLastNameLoad(r));
 
-              v.c_first.assign(RandomStr(r, RandomNumber(r, 8, 16)));
+              v.c_first.assign(RandomStr(r, uniform(8, 16)));
               v.c_credit_lim = 50000;
 
               v.c_balance = -10;
@@ -1119,15 +965,15 @@ protected:
               v.c_payment_cnt = 1;
               v.c_delivery_cnt = 0;
 
-              v.c_street_1.assign(RandomStr(r, RandomNumber(r, 10, 20)));
-              v.c_street_2.assign(RandomStr(r, RandomNumber(r, 10, 20)));
-              v.c_city.assign(RandomStr(r, RandomNumber(r, 10, 20)));
+              v.c_street_1.assign(RandomStr(r, uniform(10, 20)));
+              v.c_street_2.assign(RandomStr(r, uniform(10, 20)));
+              v.c_city.assign(RandomStr(r, uniform(10, 20)));
               v.c_state.assign(RandomStr(r, 3));
               v.c_zip.assign(RandomNStr(r, 4) + "11111");
               v.c_phone.assign(RandomNStr(r, 16));
               v.c_since = GetCurrentTimeMillis();
               v.c_middle.assign("OE");
-              v.c_data.assign(RandomStr(r, RandomNumber(r, 300, 500)));
+              v.c_data.assign(RandomStr(r, uniform(300, 500)));
 
               checker::SanityCheckCustomer(&k, &v);
               const size_t sz = Size(v);
@@ -1153,7 +999,7 @@ protected:
 
               history::value v_hist;
               v_hist.h_amount = 10;
-              v_hist.h_data.assign(RandomStr(r, RandomNumber(r, 10, 24)));
+              v_hist.h_data.assign(RandomStr(r, uniform(10, 24)));
 
               tbl_history(w)->insert(txn, Encode(k_hist), Encode(obj_buf, v_hist));
             }
@@ -1177,7 +1023,7 @@ protected:
       if (warehouse_id == -1) {
         cerr << "[INFO] finished loading customer" << endl;
         cerr << "[INFO]   * average customer record length: "
-             << (double(total_sz)/double(NumWarehouses()*NumDistrictsPerWarehouse()*NumCustomersPerDistrict()))
+             << (double(total_sz)/double(NumWarehouses()*tpcc_generator::NumDistrictsPerWarehouse()*tpcc_generator::NumCustomersPerDistrict()))
              << " bytes " << endl;
       } else {
         cerr << "[INFO] finished loading customer (w=" << warehouse_id << ")" << endl;
@@ -1223,17 +1069,17 @@ protected:
     for (uint w = w_start; w <= w_end; w++) {
       if (pin_cpus)
         PinToWarehouseId(w);
-      for (uint d = 1; d <= NumDistrictsPerWarehouse(); d++) {
+      for (uint d = 1; d <= tpcc_generator::NumDistrictsPerWarehouse(); d++) {
         set<uint> c_ids_s;
         vector<uint> c_ids;
-        while (c_ids.size() != NumCustomersPerDistrict()) {
-          const auto x = (r.next() % NumCustomersPerDistrict()) + 1;
+        while (c_ids.size() != tpcc_generator::NumCustomersPerDistrict()) {
+          const auto x = (r.next() % tpcc_generator::NumCustomersPerDistrict()) + 1;
           if (c_ids_s.count(x))
             continue;
           c_ids_s.insert(x);
           c_ids.emplace_back(x);
         }
-        for (uint c = 1; c <= NumCustomersPerDistrict();) {
+        for (uint c = 1; c <= tpcc_generator::NumCustomersPerDistrict();) {
           scoped_str_arena s_arena(arena);
           void * const txn = db->new_txn(txn_flags, arena, txn_buf());
           try {
@@ -1242,10 +1088,10 @@ protected:
             oorder::value v_oo;
             v_oo.o_c_id = c_ids[c - 1];
             if (k_oo.o_id < 2101)
-              v_oo.o_carrier_id = RandomNumber(r, 1, 10);
+              v_oo.o_carrier_id = uniform(1, 10);
             else
               v_oo.o_carrier_id = 0;
-            v_oo.o_ol_cnt = RandomNumber(r, 5, 15);
+            v_oo.o_ol_cnt = uniform(5, 15);
             v_oo.o_all_local = 1;
             v_oo.o_entry_d = GetCurrentTimeMillis();
 
@@ -1275,14 +1121,14 @@ protected:
               const order_line::key k_ol(w, d, c, l);
 
               order_line::value v_ol;
-              v_ol.ol_i_id = RandomNumber(r, 1, 100000);
+              v_ol.ol_i_id = uniform(1, 100000);
               if (k_ol.ol_o_id < 2101) {
                 v_ol.ol_delivery_d = v_oo.o_entry_d;
                 v_ol.ol_amount = 0;
               } else {
                 v_ol.ol_delivery_d = 0;
                 // random within [0.01 .. 9,999.99]
-                v_ol.ol_amount = (float) (RandomNumber(r, 1, 999999) / 100.0);
+                v_ol.ol_amount = (float) (uniform(1, 999999) / 100.0);
               }
 
               v_ol.ol_supply_w_id = k_ol.ol_w_id;
@@ -1676,7 +1522,7 @@ tpcc_worker::txn_payment(tpcc_payment_args& a)
 
     customer::key k_c;
     customer::value v_c;
-    if (RandomNumber(r, 1, 100) <= 60) {
+    if (uniform(1, 100) <= 60) {
       // cust by name
       uint8_t lastname_buf[CustomerLastNameMaxSize + 1];
       static_assert(sizeof(lastname_buf) == 16, "xx");
@@ -1818,7 +1664,7 @@ tpcc_worker::txn_order_status(tpcc_order_status_args& a)
 
     customer::key k_c;
     customer::value v_c;
-    if (RandomNumber(r, 1, 100) <= 60) {
+    if (uniform(1, 100) <= 60) {
       // cust by name
       uint8_t lastname_buf[CustomerLastNameMaxSize + 1];
       static_assert(sizeof(lastname_buf) == 16, "xx");
@@ -1995,7 +1841,7 @@ tpcc_worker::txn_stock_level(tpcc_stock_level_args& a)
         const size_t nbytesread = serializer<int16_t, true>::max_nbytes();
 
         const stock::key k_s(a.warehouse_id, p.first);
-        INVARIANT(p.first >= 1 && p.first <= NumItems());
+        INVARIANT(p.first >= 1 && p.first <= tpcc_generator::NumItems());
         {
           ANON_REGION("StockLevelLoopJoinGet:", &stock_level_probe2_cg);
           ALWAYS_ASSERT(tbl_stock(a.warehouse_id)->get(txn, Encode(obj_key0, k_s), obj_v, nbytesread));
@@ -2115,9 +1961,9 @@ public:
         memalign(
             CACHELINE_SIZE,
             sizeof(aligned_padded_elem<atomic<uint64_t>>) *
-              NumWarehouses() * NumDistrictsPerWarehouse());
+              NumWarehouses() * tpcc_generator::NumDistrictsPerWarehouse());
       g_district_ids = reinterpret_cast<aligned_padded_elem<atomic<uint64_t>> *>(px);
-      for (size_t i = 0; i < NumWarehouses() * NumDistrictsPerWarehouse(); i++)
+      for (size_t i = 0; i < NumWarehouses() * tpcc_generator::NumDistrictsPerWarehouse(); i++)
         new (&g_district_ids[i]) atomic<uint64_t>(3001);
     }
   }

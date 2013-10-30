@@ -159,39 +159,4 @@ DO_STRUCT(stock_data, STOCK_DATA_KEY_FIELDS, STOCK_DATA_VALUE_FIELDS)
   y(inline_str_fixed<9>,w_zip)
 DO_STRUCT(warehouse, WAREHOUSE_KEY_FIELDS, WAREHOUSE_VALUE_FIELDS)
 
-struct tpcc_new_order_args {
-  uint warehouse_id;
-  uint districtID;
-  uint customerID;
-  uint numItems;
-  uint itemIDs[15];
-  uint supplierWarehouseIDs[15];
-  uint orderQuantities[15];
-  bool allLocal;
-};
-
-struct tpcc_delivery_args {
-  uint warehouse_id;
-  uint o_carrier_id;
-};
-
-struct tpcc_payment_args {
-  uint warehouse_id;
-  uint districtID;
-  uint customerDistrictID;
-  uint customerWarehouseID;
-  float paymentAmount;
-};
-
-struct tpcc_order_status_args {
-  uint warehouse_id;
-  uint districtID;
-};
-
-struct tpcc_stock_level_args {
-  uint warehouse_id;
-  uint threshold;
-  uint districtID;
-};
-
 #endif
