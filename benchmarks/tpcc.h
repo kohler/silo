@@ -183,4 +183,9 @@ struct tpcc_payment_args {
   float paymentAmount;
 };
 
+struct tpcc_order_status_args {
+  uint warehouse_id;
+  uint districtID;
+};
+
 #endif

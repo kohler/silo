@@ -530,6 +530,13 @@ public:
     }
     a.paymentAmount = (float) (RandomNumber(r, 100, 500000) / 100.0);
   }
+
+  static inline void
+  choose_order_status_args(tpcc_order_status_args& a, fast_random& r,
+                           uint warehouse_id_start, uint warehouse_id_end) {
+    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
+    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
+  }
 };
 
 string tpcc_worker_mixin::NameTokens[] =
@@ -635,13 +642,21 @@ public:
     return static_cast<tpcc_worker *>(w)->txn_payment(a);
   }
 
-  txn_result txn_order_status();
+
+  void choose_order_status_args(tpcc_order_status_args& a) {
+    tpcc_worker_mixin::choose_order_status_args
+      (a, this->r, warehouse_id_start, warehouse_id_end);
+  }
+
+  txn_result txn_order_status(tpcc_order_status_args& a);
 
   static txn_result
   TxnOrderStatus(bench_worker *w)
   {
     ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
-    return static_cast<tpcc_worker *>(w)->txn_order_status();
+    tpcc_order_status_args a;
+    static_cast<tpcc_worker*>(w)->choose_order_status_args(a);
+    return static_cast<tpcc_worker *>(w)->txn_order_status(a);
   }
 
   txn_result txn_stock_level();
@@ -1765,11 +1780,8 @@ public:
 STATIC_COUNTER_DECL(scopedperf::tod_ctr, order_status_probe0_tod, order_status_probe0_cg)
 
 tpcc_worker::txn_result
-tpcc_worker::txn_order_status()
+tpcc_worker::txn_order_status(tpcc_order_status_args& a)
 {
-  const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-  const uint districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-
   // output from txn counters:
   //   max_absent_range_set_size : 0
   //   max_absent_set_size : 0
@@ -1802,19 +1814,19 @@ tpcc_worker::txn_order_status()
       static const string ones(16, 255);
 
       customer_name_idx::key k_c_idx_0;
-      k_c_idx_0.c_w_id = warehouse_id;
-      k_c_idx_0.c_d_id = districtID;
+      k_c_idx_0.c_w_id = a.warehouse_id;
+      k_c_idx_0.c_d_id = a.districtID;
       k_c_idx_0.c_last.assign((const char *) lastname_buf, 16);
       k_c_idx_0.c_first.assign(zeros);
 
       customer_name_idx::key k_c_idx_1;
-      k_c_idx_1.c_w_id = warehouse_id;
-      k_c_idx_1.c_d_id = districtID;
+      k_c_idx_1.c_w_id = a.warehouse_id;
+      k_c_idx_1.c_d_id = a.districtID;
       k_c_idx_1.c_last.assign((const char *) lastname_buf, 16);
       k_c_idx_1.c_first.assign(ones);
 
       static_limit_callback<NMaxCustomerIdxScanElems> c(s_arena.get(), true); // probably a safe bet for now
-      tbl_customer_name_idx(warehouse_id)->scan(txn, Encode(obj_key0, k_c_idx_0), &Encode(obj_key1, k_c_idx_1), c, s_arena.get());
+      tbl_customer_name_idx(a.warehouse_id)->scan(txn, Encode(obj_key0, k_c_idx_0), &Encode(obj_key1, k_c_idx_1), c, s_arena.get());
       ALWAYS_ASSERT(c.size() > 0);
       INVARIANT(c.size() < NMaxCustomerIdxScanElems); // we should detect this
       int index = c.size() / 2;
@@ -1825,19 +1837,19 @@ tpcc_worker::txn_order_status()
       customer_name_idx::value v_c_idx_temp;
       const customer_name_idx::value *v_c_idx = Decode(*c.values[index].second, v_c_idx_temp);
 
-      k_c.c_w_id = warehouse_id;
-      k_c.c_d_id = districtID;
+      k_c.c_w_id = a.warehouse_id;
+      k_c.c_d_id = a.districtID;
       k_c.c_id = v_c_idx->c_id;
-      ALWAYS_ASSERT(tbl_customer(warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
+      ALWAYS_ASSERT(tbl_customer(a.warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
       Decode(obj_v, v_c);
 
     } else {
       // cust by ID
       const uint customerID = GetCustomerId(r);
-      k_c.c_w_id = warehouse_id;
-      k_c.c_d_id = districtID;
+      k_c.c_w_id = a.warehouse_id;
+      k_c.c_d_id = a.districtID;
       k_c.c_id = customerID;
-      ALWAYS_ASSERT(tbl_customer(warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
+      ALWAYS_ASSERT(tbl_customer(a.warehouse_id)->get(txn, Encode(obj_key0, k_c), obj_v));
       Decode(obj_v, v_c);
     }
     checker::SanityCheckCustomer(&k_c, &v_c);
@@ -1854,17 +1866,17 @@ tpcc_worker::txn_order_status()
       // much of a difference in terms of performance numbers (in fact we are
       // making it worse for us)
       latest_key_callback c_oorder(*newest_o_c_id, (r.next() % 15) + 1);
-      const oorder_c_id_idx::key k_oo_idx_0(warehouse_id, districtID, k_c.c_id, 0);
-      const oorder_c_id_idx::key k_oo_idx_1(warehouse_id, districtID, k_c.c_id, numeric_limits<int32_t>::max());
+      const oorder_c_id_idx::key k_oo_idx_0(a.warehouse_id, a.districtID, k_c.c_id, 0);
+      const oorder_c_id_idx::key k_oo_idx_1(a.warehouse_id, a.districtID, k_c.c_id, numeric_limits<int32_t>::max());
       {
         ANON_REGION("OrderStatusOOrderScan:", &order_status_probe0_cg);
-        tbl_oorder_c_id_idx(warehouse_id)->scan(txn, Encode(obj_key0, k_oo_idx_0), &Encode(obj_key1, k_oo_idx_1), c_oorder, s_arena.get());
+        tbl_oorder_c_id_idx(a.warehouse_id)->scan(txn, Encode(obj_key0, k_oo_idx_0), &Encode(obj_key1, k_oo_idx_1), c_oorder, s_arena.get());
       }
       ALWAYS_ASSERT(c_oorder.size());
     } else {
       latest_key_callback c_oorder(*newest_o_c_id, 1);
-      const oorder_c_id_idx::key k_oo_idx_hi(warehouse_id, districtID, k_c.c_id, numeric_limits<int32_t>::max());
-      tbl_oorder_c_id_idx(warehouse_id)->rscan(txn, Encode(obj_key0, k_oo_idx_hi), nullptr, c_oorder, s_arena.get());
+      const oorder_c_id_idx::key k_oo_idx_hi(a.warehouse_id, a.districtID, k_c.c_id, numeric_limits<int32_t>::max());
+      tbl_oorder_c_id_idx(a.warehouse_id)->rscan(txn, Encode(obj_key0, k_oo_idx_hi), nullptr, c_oorder, s_arena.get());
       ALWAYS_ASSERT(c_oorder.size() == 1);
     }
 
@@ -1873,9 +1885,9 @@ tpcc_worker::txn_order_status()
     const uint o_id = k_oo_idx->o_o_id;
 
     order_line_nop_callback c_order_line;
-    const order_line::key k_ol_0(warehouse_id, districtID, o_id, 0);
-    const order_line::key k_ol_1(warehouse_id, districtID, o_id, numeric_limits<int32_t>::max());
-    tbl_order_line(warehouse_id)->scan(txn, Encode(obj_key0, k_ol_0), &Encode(obj_key1, k_ol_1), c_order_line, s_arena.get());
+    const order_line::key k_ol_0(a.warehouse_id, a.districtID, o_id, 0);
+    const order_line::key k_ol_1(a.warehouse_id, a.districtID, o_id, numeric_limits<int32_t>::max());
+    tbl_order_line(a.warehouse_id)->scan(txn, Encode(obj_key0, k_ol_0), &Encode(obj_key1, k_ol_1), c_order_line, s_arena.get());
     ALWAYS_ASSERT(c_order_line.n >= 5 && c_order_line.n <= 15);
 
     measure_txn_counters(txn, "txn_order_status");
