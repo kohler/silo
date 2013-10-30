@@ -36,6 +36,8 @@ DO_STRUCT(encstress_rec, ENCSTRESS_REC_KEY_FIELDS, ENCSTRESS_REC_VALUE_FIELDS)
 
 class encstress_worker : public bench_worker {
 public:
+  enum { ReadCounter = 0 };
+
   encstress_worker(
       unsigned int worker_id,
       unsigned long seed, abstract_db *db,
@@ -45,6 +47,7 @@ public:
                    open_tables, barrier_a, barrier_b),
       tbl(open_tables.at("table"))
   {
+    add_counter(ReadCounter, "Read");
   }
 
   txn_result
@@ -69,12 +72,8 @@ public:
     return static_cast<encstress_worker *>(w)->txn_read();
   }
 
-  virtual workload_desc_vec
-  get_workload() const
-  {
-    workload_desc_vec w;
-    w.push_back(workload_desc("Read", 1.0, TxnRead));
-    return w;
+  virtual void go() OVERRIDE {
+    execute_with_retry(TxnRead, ReadCounter);
   }
 
 private:

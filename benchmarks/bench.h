@@ -127,20 +127,20 @@ public:
   typedef std::pair<bool, ssize_t> txn_result;
   typedef txn_result (*txn_fn_t)(bench_worker *);
 
-  struct workload_desc {
-    workload_desc() {}
-    workload_desc(const std::string &name, double frequency, txn_fn_t fn)
-      : name(name), frequency(frequency), fn(fn)
-    {
-      ALWAYS_ASSERT(frequency > 0.0);
-      ALWAYS_ASSERT(frequency <= 1.0);
+  void add_counter(int counter, std::string name) {
+    ALWAYS_ASSERT(counter >= 0);
+    while (txn_counts.size() <= (size_t) counter) {
+      txn_count_names.push_back(std::string());
+      txn_counts.push_back(0);
     }
-    std::string name;
-    double frequency;
-    txn_fn_t fn;
-  };
-  typedef std::vector<workload_desc> workload_desc_vec;
-  virtual workload_desc_vec get_workload() const = 0;
+    txn_count_names[counter] = name;
+    txn_counts[counter] = 0;
+  }
+
+  template <typename F>
+  void execute_with_retry(F& f, int counter);
+
+  virtual void go() = 0;
 
   virtual void run();
 
@@ -169,6 +169,8 @@ public:
 #endif
 
   inline ssize_t get_size_delta() const { return size_delta; }
+
+  static event_avg_counter evt_avg_abort_spins;
 
 protected:
 
@@ -199,6 +201,7 @@ protected:
   inline ALWAYS_INLINE void measure_txn_counters(void *txn, const char *txn_name) {}
 #endif
 
+  std::vector<std::string> txn_count_names;
   std::vector<size_t> txn_counts; // breakdown of txns
   ssize_t size_delta; // how many logical bytes (of values) did the worker add to the DB
 
@@ -333,5 +336,40 @@ private:
   str_arena *arena;
   bool ignore_key;
 };
+
+template <typename F>
+void bench_worker::execute_with_retry(F& f, int counter) {
+ retry:
+  util::timer t;
+  const unsigned long old_seed = r.get_seed();
+  const auto ret = f(this);
+  if (likely(ret.first)) {
+    ++ntxn_commits;
+    latency_numer_us += t.lap();
+    backoff_shifts >>= 1;
+  } else {
+    ++ntxn_aborts;
+    if (retry_aborted_transaction && running) {
+      if (backoff_aborted_transaction) {
+        if (backoff_shifts < 63)
+          backoff_shifts++;
+        uint64_t spins = 1UL << backoff_shifts;
+        spins *= 100; // XXX: tuned pretty arbitrarily
+        evt_avg_abort_spins.offer(spins);
+        while (spins) {
+          nop_pause();
+          spins--;
+        }
+      }
+      r.set_seed(old_seed);
+      goto retry;
+    }
+  }
+  size_delta += ret.second; // should be zero on abort
+  if (counter >= 0)
+    txn_counts[counter]++; // txn_counts aren't used to compute throughput (is
+                         // just an informative number to print to the console
+                         // in verbose mode)
+}
 
 #endif /* _NDB_BENCH_H_ */

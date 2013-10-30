@@ -25,10 +25,12 @@ using namespace util;
 static size_t nkeys;
 static const size_t YCSBRecordSize = 100;
 
-// [R, W, RMW, Scan]
+// [R, W, RMW, Scan] -- order matters!
+enum { ReadCounter, WriteCounter, ReadModifyWriteCounter, ScanCounter };
 // we're missing remove for now
 // the default is a modification of YCSB "A" we made (80/20 R/W)
 static unsigned g_txn_workload_mix[] = { 80, 20, 0, 0 };
+static double g_txn_workload_fraction[4];
 
 class ycsb_worker : public bench_worker {
 public:
@@ -44,6 +46,11 @@ public:
     obj_key0.reserve(str_arena::MinStrReserveLength);
     obj_key1.reserve(str_arena::MinStrReserveLength);
     obj_v.reserve(str_arena::MinStrReserveLength);
+
+    add_counter(ReadCounter, "Read");
+    add_counter(WriteCounter, "Write");
+    add_counter(ReadModifyWriteCounter, "ReadModifyWrite");
+    add_counter(ScanCounter, "Scan");
   }
 
   txn_result
@@ -156,38 +163,16 @@ public:
     return static_cast<ycsb_worker *>(w)->txn_scan();
   }
 
-  virtual workload_desc_vec
-  get_workload() const
-  {
-    //w.push_back(workload_desc("Read", 0.95, TxnRead));
-    //w.push_back(workload_desc("ReadModifyWrite", 0.04, TxnRmw));
-    //w.push_back(workload_desc("Write", 0.01, TxnWrite));
-
-    //w.push_back(workload_desc("Read", 1.0, TxnRead));
-    //w.push_back(workload_desc("Write", 1.0, TxnWrite));
-
-    // YCSB workload "A" - 50/50 read/write
-    //w.push_back(workload_desc("Read", 0.5, TxnRead));
-    //w.push_back(workload_desc("Write", 0.5, TxnWrite));
-
-    // YCSB workload custom - 80/20 read/write
-    //w.push_back(workload_desc("Read",  0.8, TxnRead));
-    //w.push_back(workload_desc("Write", 0.2, TxnWrite));
-
-    workload_desc_vec w;
-    unsigned m = 0;
-    for (size_t i = 0; i < ARRAY_NELEMS(g_txn_workload_mix); i++)
-      m += g_txn_workload_mix[i];
-    ALWAYS_ASSERT(m == 100);
-    if (g_txn_workload_mix[0])
-      w.push_back(workload_desc("Read",  double(g_txn_workload_mix[0])/100.0, TxnRead));
-    if (g_txn_workload_mix[1])
-      w.push_back(workload_desc("Write",  double(g_txn_workload_mix[1])/100.0, TxnWrite));
-    if (g_txn_workload_mix[2])
-      w.push_back(workload_desc("ReadModifyWrite",  double(g_txn_workload_mix[2])/100.0, TxnRmw));
-    if (g_txn_workload_mix[3])
-      w.push_back(workload_desc("Scan",  double(g_txn_workload_mix[3])/100.0, TxnScan));
-    return w;
+  virtual void go() OVERRIDE {
+    double which = this->r.next_uniform();
+    if (which < g_txn_workload_fraction[ReadCounter])
+      execute_with_retry(TxnRead, ReadCounter);
+    else if (which < g_txn_workload_fraction[WriteCounter])
+      execute_with_retry(TxnWrite, WriteCounter);
+    else if (which < g_txn_workload_fraction[ReadModifyWriteCounter])
+      execute_with_retry(TxnRmw, ReadModifyWriteCounter);
+    else
+      execute_with_retry(TxnScan, ScanCounter);
   }
 
 protected:
@@ -513,6 +498,13 @@ ycsb_do_test(abstract_db *db, int argc, char **argv)
          << format_list(g_txn_workload_mix, g_txn_workload_mix + ARRAY_NELEMS(g_txn_workload_mix))
          << endl;
   }
+
+  unsigned m = 0;
+  for (size_t i = 0; i != ARRAY_NELEMS(g_txn_workload_mix); ++i) {
+    m += g_txn_workload_mix[i];
+    g_txn_workload_fraction[i] = m / 100.0;
+  }
+  ALWAYS_ASSERT(m == 100);
 
   ycsb_bench_runner r(db);
   r.run();

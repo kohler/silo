@@ -148,7 +148,12 @@ static int g_new_order_remote_item_pct = 1;
 static int g_new_order_fast_id_gen = 0;
 static int g_uniform_item_dist = 0;
 static int g_order_status_scan_hack = 0;
+
+// order matters
+enum { NewOrderCounter, PaymentCounter, DeliveryCounter, OrderStatusCounter,
+       StockLevelCounter };
 static unsigned g_txn_workload_mix[] = { 45, 43, 4, 4, 4 }; // default TPC-C workload mix
+static double g_txn_workload_fraction[] = { 0, 0, 0, 0, 0 };
 
 static aligned_padded_elem<spinlock> *g_partition_locks = nullptr;
 static aligned_padded_elem<atomic<uint64_t>> *g_district_ids = nullptr;
@@ -592,6 +597,12 @@ public:
     obj_key0.reserve(str_arena::MinStrReserveLength);
     obj_key1.reserve(str_arena::MinStrReserveLength);
     obj_v.reserve(str_arena::MinStrReserveLength);
+
+    add_counter(NewOrderCounter, "NewOrder");
+    add_counter(PaymentCounter, "Payment");
+    add_counter(DeliveryCounter, "Delivery");
+    add_counter(OrderStatusCounter, "OrderStatus");
+    add_counter(StockLevelCounter, "StockLevel");
   }
 
   // XXX(stephentu): tune this
@@ -684,31 +695,19 @@ public:
     return static_cast<tpcc_worker *>(w)->txn_stock_level(a);
   }
 
-  virtual workload_desc_vec
-  get_workload() const
-  {
-    workload_desc_vec w;
-    // numbers from sigmod.csail.mit.edu:
-    //w.push_back(workload_desc("NewOrder", 1.0, TxnNewOrder)); // ~10k ops/sec
-    //w.push_back(workload_desc("Payment", 1.0, TxnPayment)); // ~32k ops/sec
-    //w.push_back(workload_desc("Delivery", 1.0, TxnDelivery)); // ~104k ops/sec
-    //w.push_back(workload_desc("OrderStatus", 1.0, TxnOrderStatus)); // ~33k ops/sec
-    //w.push_back(workload_desc("StockLevel", 1.0, TxnStockLevel)); // ~2k ops/sec
-    unsigned m = 0;
-    for (size_t i = 0; i < ARRAY_NELEMS(g_txn_workload_mix); i++)
-      m += g_txn_workload_mix[i];
-    ALWAYS_ASSERT(m == 100);
-    if (g_txn_workload_mix[0])
-      w.push_back(workload_desc("NewOrder", double(g_txn_workload_mix[0])/100.0, TxnNewOrder));
-    if (g_txn_workload_mix[1])
-      w.push_back(workload_desc("Payment", double(g_txn_workload_mix[1])/100.0, TxnPayment));
-    if (g_txn_workload_mix[2])
-      w.push_back(workload_desc("Delivery", double(g_txn_workload_mix[2])/100.0, TxnDelivery));
-    if (g_txn_workload_mix[3])
-      w.push_back(workload_desc("OrderStatus", double(g_txn_workload_mix[3])/100.0, TxnOrderStatus));
-    if (g_txn_workload_mix[4])
-      w.push_back(workload_desc("StockLevel", double(g_txn_workload_mix[4])/100.0, TxnStockLevel));
-    return w;
+
+  virtual void go() OVERRIDE {
+    double which = this->r.next_uniform();
+    if (which < g_txn_workload_fraction[NewOrderCounter])
+      execute_with_retry(TxnNewOrder, NewOrderCounter);
+    else if (which < g_txn_workload_fraction[PaymentCounter])
+      execute_with_retry(TxnPayment, PaymentCounter);
+    else if (which < g_txn_workload_fraction[DeliveryCounter])
+      execute_with_retry(TxnDelivery, DeliveryCounter);
+    else if (which < g_txn_workload_fraction[OrderStatusCounter])
+      execute_with_retry(TxnOrderStatus, OrderStatusCounter);
+    else
+      execute_with_retry(TxnStockLevel, StockLevelCounter);
   }
 
 protected:
@@ -2275,6 +2274,13 @@ tpcc_do_test(abstract_db *db, int argc, char **argv)
       format_list(g_txn_workload_mix,
                   g_txn_workload_mix + ARRAY_NELEMS(g_txn_workload_mix)) << endl;
   }
+
+  unsigned m = 0;
+  for (size_t i = 0; i != ARRAY_NELEMS(g_txn_workload_mix); ++i) {
+    m += g_txn_workload_mix[i];
+    g_txn_workload_fraction[i] = m / 100.0;
+  }
+  ALWAYS_ASSERT(m == 100);
 
   tpcc_bench_runner r(db);
   r.run();

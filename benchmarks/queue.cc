@@ -35,6 +35,9 @@ static const string queue_values("ABCDEFGH");
 
 class queue_worker : public bench_worker {
 public:
+  enum { ProduceCounter, ConsumeCounter, ConsumeScanHintCounter,
+         ConsumeNoScanCounter };
+
   queue_worker(unsigned int worker_id,
                unsigned long seed, abstract_db *db,
                const map<string, abstract_ordered_index *> &open_tables,
@@ -45,6 +48,10 @@ public:
       tbl(open_tables.at("table")), id(id), consumer(consumer),
       ctr(consumer ? 0 : nkeys)
   {
+    add_counter(ProduceCounter, "Produce");
+    add_counter(ConsumeCounter, "Consume");
+    add_counter(ConsumeScanHintCounter, "ConsumeScanHint");
+    add_counter(ConsumeNoScanCounter, "ConsumeNoScan");
   }
 
   txn_result
@@ -162,17 +169,13 @@ public:
     return static_cast<queue_worker *>(w)->txn_consume_noscan();
   }
 
-  virtual workload_desc_vec
-  get_workload() const
-  {
-    workload_desc_vec w;
+  virtual void go() OVERRIDE {
     if (consumer)
-      w.push_back(workload_desc("Consume", 1.0, TxnConsume));
-      //w.push_back(workload_desc("ConsumeScanHint", 1.0, TxnConsumeScanHint));
-      //w.push_back(workload_desc("ConsumeNoScan", 1.0, TxnConsumeNoScan));
+      execute_with_retry(TxnConsume, ConsumeCounter);
+      //execute_with_retry(TxnConsumeScanHint, ConsumeScanHintCounter);
+      //execute_with_retry(TxnConsumeNoScan, ConsumeNoScanCounter);
     else
-      w.push_back(workload_desc("Produce", 1.0, TxnProduce));
-    return w;
+      execute_with_retry(TxnProduce, ProduceCounter);
   }
 
 private:
