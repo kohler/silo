@@ -170,4 +170,12 @@ struct tpcc_new_order_args {
   bool allLocal;
 };
 
+struct tpcc_payment_args {
+  uint warehouse_id;
+  uint districtID;
+  uint customerDistrictID;
+  uint customerWarehouseID;
+  float paymentAmount;
+};
+
 #endif

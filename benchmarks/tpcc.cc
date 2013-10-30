@@ -503,6 +503,26 @@ public:
       a.orderQuantities[i] = RandomNumber(r, 1, 10);
     }
   }
+
+  static inline void
+  choose_payment_args(tpcc_payment_args& a, fast_random& r,
+                      uint warehouse_id_start, uint warehouse_id_end,
+                      uint numWarehouses, bool disable_xpartition_txn) {
+    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
+    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
+    if (likely(disable_xpartition_txn ||
+               numWarehouses == 1 ||
+               RandomNumber(r, 1, 100) <= 85)) {
+      a.customerDistrictID = a.districtID;
+      a.customerWarehouseID = a.warehouse_id;
+    } else {
+      a.customerDistrictID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
+      do {
+        a.customerWarehouseID = RandomNumber(r, 1, numWarehouses);
+      } while (a.customerWarehouseID == a.warehouse_id);
+    }
+    a.paymentAmount = (float) (RandomNumber(r, 100, 500000) / 100.0);
+  }
 };
 
 string tpcc_worker_mixin::NameTokens[] =
@@ -581,13 +601,21 @@ public:
     return static_cast<tpcc_worker *>(w)->txn_delivery();
   }
 
-  txn_result txn_payment();
+  void choose_payment_args(tpcc_payment_args& a) {
+    tpcc_worker_mixin::choose_payment_args
+      (a, this->r, warehouse_id_start, warehouse_id_end, NumWarehouses(),
+       g_disable_xpartition_txn);
+  }
+
+  txn_result txn_payment(tpcc_payment_args& a);
 
   static txn_result
   TxnPayment(bench_worker *w)
   {
     ANON_REGION("TxnPayment:", &tpcc_txn_cg);
-    return static_cast<tpcc_worker *>(w)->txn_payment();
+    tpcc_payment_args a;
+    static_cast<tpcc_worker*>(w)->choose_payment_args(a);
+    return static_cast<tpcc_worker *>(w)->txn_payment(a);
   }
 
   txn_result txn_order_status();
@@ -1555,25 +1583,10 @@ tpcc_worker::txn_delivery()
 static event_avg_counter evt_avg_cust_name_idx_scan_size("avg_cust_name_idx_scan_size");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_payment()
+tpcc_worker::txn_payment(tpcc_payment_args& a)
 {
-  const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-  const uint districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-  uint customerDistrictID, customerWarehouseID;
-  if (likely(g_disable_xpartition_txn ||
-             NumWarehouses() == 1 ||
-             RandomNumber(r, 1, 100) <= 85)) {
-    customerDistrictID = districtID;
-    customerWarehouseID = warehouse_id;
-  } else {
-    customerDistrictID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-    do {
-      customerWarehouseID = RandomNumber(r, 1, NumWarehouses());
-    } while (customerWarehouseID == warehouse_id);
-  }
-  const float paymentAmount = (float) (RandomNumber(r, 100, 500000) / 100.0);
   const uint32_t ts = GetCurrentTimeMillis();
-  INVARIANT(!g_disable_xpartition_txn || customerWarehouseID == warehouse_id);
+  INVARIANT(!g_disable_xpartition_txn || a.customerWarehouseID == a.warehouse_id);
 
   // output from txn counters:
   //   max_absent_range_set_size : 0
@@ -1586,35 +1599,35 @@ tpcc_worker::txn_payment()
   scoped_str_arena s_arena(arena);
   scoped_multilock<spinlock> mlock;
   if (g_enable_partition_locks) {
-    mlock.enq(LockForPartition(warehouse_id));
-    if (PartitionId(customerWarehouseID) != PartitionId(warehouse_id))
-      mlock.enq(LockForPartition(customerWarehouseID));
+    mlock.enq(LockForPartition(a.warehouse_id));
+    if (PartitionId(a.customerWarehouseID) != PartitionId(a.warehouse_id))
+      mlock.enq(LockForPartition(a.customerWarehouseID));
     mlock.multilock();
   }
-  if (customerWarehouseID != warehouse_id)
+  if (a.customerWarehouseID != a.warehouse_id)
     ++evt_tpcc_cross_partition_payment_txns;
   try {
     ssize_t ret = 0;
 
-    const warehouse::key k_w(warehouse_id);
-    ALWAYS_ASSERT(tbl_warehouse(warehouse_id)->get(txn, Encode(obj_key0, k_w), obj_v));
+    const warehouse::key k_w(a.warehouse_id);
+    ALWAYS_ASSERT(tbl_warehouse(a.warehouse_id)->get(txn, Encode(obj_key0, k_w), obj_v));
     warehouse::value v_w_temp;
     const warehouse::value *v_w = Decode(obj_v, v_w_temp);
     checker::SanityCheckWarehouse(&k_w, v_w);
 
     warehouse::value v_w_new(*v_w);
-    v_w_new.w_ytd += paymentAmount;
-    tbl_warehouse(warehouse_id)->put(txn, Encode(str(), k_w), Encode(str(), v_w_new));
+    v_w_new.w_ytd += a.paymentAmount;
+    tbl_warehouse(a.warehouse_id)->put(txn, Encode(str(), k_w), Encode(str(), v_w_new));
 
-    const district::key k_d(warehouse_id, districtID);
-    ALWAYS_ASSERT(tbl_district(warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
+    const district::key k_d(a.warehouse_id, a.districtID);
+    ALWAYS_ASSERT(tbl_district(a.warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
     district::value v_d_temp;
     const district::value *v_d = Decode(obj_v, v_d_temp);
     checker::SanityCheckDistrict(&k_d, v_d);
 
     district::value v_d_new(*v_d);
-    v_d_new.d_ytd += paymentAmount;
-    tbl_district(warehouse_id)->put(txn, Encode(str(), k_d), Encode(str(), v_d_new));
+    v_d_new.d_ytd += a.paymentAmount;
+    tbl_district(a.warehouse_id)->put(txn, Encode(str(), k_d), Encode(str(), v_d_new));
 
     customer::key k_c;
     customer::value v_c;
@@ -1629,19 +1642,19 @@ tpcc_worker::txn_payment()
       static const string ones(16, 255);
 
       customer_name_idx::key k_c_idx_0;
-      k_c_idx_0.c_w_id = customerWarehouseID;
-      k_c_idx_0.c_d_id = customerDistrictID;
+      k_c_idx_0.c_w_id = a.customerWarehouseID;
+      k_c_idx_0.c_d_id = a.customerDistrictID;
       k_c_idx_0.c_last.assign((const char *) lastname_buf, 16);
       k_c_idx_0.c_first.assign(zeros);
 
       customer_name_idx::key k_c_idx_1;
-      k_c_idx_1.c_w_id = customerWarehouseID;
-      k_c_idx_1.c_d_id = customerDistrictID;
+      k_c_idx_1.c_w_id = a.customerWarehouseID;
+      k_c_idx_1.c_d_id = a.customerDistrictID;
       k_c_idx_1.c_last.assign((const char *) lastname_buf, 16);
       k_c_idx_1.c_first.assign(ones);
 
       static_limit_callback<NMaxCustomerIdxScanElems> c(s_arena.get(), true); // probably a safe bet for now
-      tbl_customer_name_idx(customerWarehouseID)->scan(txn, Encode(obj_key0, k_c_idx_0), &Encode(obj_key1, k_c_idx_1), c, s_arena.get());
+      tbl_customer_name_idx(a.customerWarehouseID)->scan(txn, Encode(obj_key0, k_c_idx_0), &Encode(obj_key1, k_c_idx_1), c, s_arena.get());
       ALWAYS_ASSERT(c.size() > 0);
       INVARIANT(c.size() < NMaxCustomerIdxScanElems); // we should detect this
       int index = c.size() / 2;
@@ -1652,26 +1665,26 @@ tpcc_worker::txn_payment()
       customer_name_idx::value v_c_idx_temp;
       const customer_name_idx::value *v_c_idx = Decode(*c.values[index].second, v_c_idx_temp);
 
-      k_c.c_w_id = customerWarehouseID;
-      k_c.c_d_id = customerDistrictID;
+      k_c.c_w_id = a.customerWarehouseID;
+      k_c.c_d_id = a.customerDistrictID;
       k_c.c_id = v_c_idx->c_id;
-      ALWAYS_ASSERT(tbl_customer(customerWarehouseID)->get(txn, Encode(obj_key0, k_c), obj_v));
+      ALWAYS_ASSERT(tbl_customer(a.customerWarehouseID)->get(txn, Encode(obj_key0, k_c), obj_v));
       Decode(obj_v, v_c);
 
     } else {
       // cust by ID
       const uint customerID = GetCustomerId(r);
-      k_c.c_w_id = customerWarehouseID;
-      k_c.c_d_id = customerDistrictID;
+      k_c.c_w_id = a.customerWarehouseID;
+      k_c.c_d_id = a.customerDistrictID;
       k_c.c_id = customerID;
-      ALWAYS_ASSERT(tbl_customer(customerWarehouseID)->get(txn, Encode(obj_key0, k_c), obj_v));
+      ALWAYS_ASSERT(tbl_customer(a.customerWarehouseID)->get(txn, Encode(obj_key0, k_c), obj_v));
       Decode(obj_v, v_c);
     }
     checker::SanityCheckCustomer(&k_c, &v_c);
     customer::value v_c_new(v_c);
 
-    v_c_new.c_balance -= paymentAmount;
-    v_c_new.c_ytd_payment += paymentAmount;
+    v_c_new.c_balance -= a.paymentAmount;
+    v_c_new.c_ytd_payment += a.paymentAmount;
     v_c_new.c_payment_cnt++;
     if (strncmp(v_c.c_credit.data(), "BC", 2) == 0) {
       char buf[501];
@@ -1679,20 +1692,20 @@ tpcc_worker::txn_payment()
                        k_c.c_id,
                        k_c.c_d_id,
                        k_c.c_w_id,
-                       districtID,
-                       warehouse_id,
-                       paymentAmount,
+                       a.districtID,
+                       a.warehouse_id,
+                       a.paymentAmount,
                        v_c.c_data.c_str());
       v_c_new.c_data.resize_junk(
           min(static_cast<size_t>(n), v_c_new.c_data.max_size()));
       NDB_MEMCPY((void *) v_c_new.c_data.data(), &buf[0], v_c_new.c_data.size());
     }
 
-    tbl_customer(customerWarehouseID)->put(txn, Encode(str(), k_c), Encode(str(), v_c_new));
+    tbl_customer(a.customerWarehouseID)->put(txn, Encode(str(), k_c), Encode(str(), v_c_new));
 
-    const history::key k_h(k_c.c_d_id, k_c.c_w_id, k_c.c_id, districtID, warehouse_id, ts);
+    const history::key k_h(k_c.c_d_id, k_c.c_w_id, k_c.c_id, a.districtID, a.warehouse_id, ts);
     history::value v_h;
-    v_h.h_amount = paymentAmount;
+    v_h.h_amount = a.paymentAmount;
     v_h.h_data.resize_junk(v_h.h_data.max_size());
     int n = snprintf((char *) v_h.h_data.data(), v_h.h_data.max_size() + 1,
                      "%.10s    %.10s",
@@ -1701,7 +1714,7 @@ tpcc_worker::txn_payment()
     v_h.h_data.resize_junk(min(static_cast<size_t>(n), v_h.h_data.max_size()));
 
     const size_t history_sz = Size(v_h);
-    tbl_history(warehouse_id)->insert(txn, Encode(str(), k_h), Encode(str(), v_h));
+    tbl_history(a.warehouse_id)->insert(txn, Encode(str(), k_h), Encode(str(), v_h));
     ret += history_sz;
 
     measure_txn_counters(txn, "txn_payment");
