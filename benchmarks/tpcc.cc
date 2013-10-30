@@ -483,83 +483,68 @@ public:
   static const size_t NMaxCustomerIdxScanElems = 512;
 
 
-  txn_result txn_new_order(tpcc_new_order_args& a);
+  txn_result txn_new_order();
 
-  struct new_order_caller {
-    tpcc_new_order_args a;
-    txn_result operator()(bench_worker* w) {
-      ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
-      return static_cast<tpcc_worker*>(w)->txn_new_order(a);
-    }
-  };
+  static txn_result
+  TxnNewOrder(bench_worker* w) {
+    ANON_REGION("TxnNewOrder:", &tpcc_txn_cg);
+    return static_cast<tpcc_worker*>(w)->txn_new_order();
+  }
 
 
-  txn_result txn_delivery(tpcc_delivery_args& a);
+  txn_result txn_delivery();
 
-  struct delivery_caller {
-    tpcc_delivery_args a;
-    txn_result operator()(bench_worker* w) {
-      ANON_REGION("TxnDelivery:", &tpcc_txn_cg);
-      return static_cast<tpcc_worker*>(w)->txn_delivery(a);
-    }
-  };
+  static txn_result
+  TxnDelivery(bench_worker* w) {
+    ANON_REGION("TxnDelivery:", &tpcc_txn_cg);
+    return static_cast<tpcc_worker*>(w)->txn_delivery();
+  }
 
 
-  txn_result txn_payment(tpcc_payment_args& a);
+  txn_result txn_payment();
 
-  struct payment_caller {
-    tpcc_payment_args a;
-    txn_result operator()(bench_worker* w) {
-      ANON_REGION("TxnPayment:", &tpcc_txn_cg);
-      return static_cast<tpcc_worker*>(w)->txn_payment(a);
-    }
-  };
+  static txn_result
+  TxnPayment(bench_worker* w) {
+    ANON_REGION("TxnPayment:", &tpcc_txn_cg);
+    return static_cast<tpcc_worker*>(w)->txn_payment();
+  }
 
 
-  txn_result txn_order_status(tpcc_order_status_args& a);
+  txn_result txn_order_status();
 
-  struct order_status_caller {
-    tpcc_order_status_args a;
-    txn_result operator()(bench_worker* w) {
-      ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
-      return static_cast<tpcc_worker*>(w)->txn_order_status(a);
-    }
-  };
+  static txn_result
+  TxnOrderStatus(bench_worker* w) {
+    ANON_REGION("TxnOrderStatus:", &tpcc_txn_cg);
+    return static_cast<tpcc_worker*>(w)->txn_order_status();
+  }
 
 
-  txn_result txn_stock_level(tpcc_stock_level_args& a);
+  txn_result txn_stock_level();
 
-  struct stock_level_caller {
-    tpcc_stock_level_args a;
-    txn_result operator()(bench_worker* w) {
-      ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
-      return static_cast<tpcc_worker*>(w)->txn_stock_level(a);
-    }
-  };
+  static txn_result
+  TxnStockLevel(bench_worker* w) {
+    ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
+    return static_cast<tpcc_worker*>(w)->txn_stock_level();
+  }
 
 
   virtual void go() OVERRIDE {
     double which = this->r.next_uniform();
     if (which < g_txn_workload_fraction[NewOrderCounter]) {
-      new_order_caller c;
-      choose_new_order_args(c.a, r);
-      execute_with_retry(c, NewOrderCounter);
+      choose_new_order_args(args.new_order, r);
+      execute_with_retry(TxnNewOrder, NewOrderCounter);
     } else if (which < g_txn_workload_fraction[PaymentCounter]) {
-      payment_caller c;
-      choose_payment_args(c.a, r);
-      execute_with_retry(c, PaymentCounter);
+      choose_payment_args(args.payment, r);
+      execute_with_retry(TxnPayment, PaymentCounter);
     } else if (which < g_txn_workload_fraction[DeliveryCounter]) {
-      delivery_caller c;
-      choose_delivery_args(c.a, r);
-      execute_with_retry(c, DeliveryCounter);
+      choose_delivery_args(args.delivery, r);
+      execute_with_retry(TxnDelivery, DeliveryCounter);
     } else if (which < g_txn_workload_fraction[OrderStatusCounter]) {
-      order_status_caller c;
-      choose_order_status_args(c.a, r);
-      execute_with_retry(c, OrderStatusCounter);
+      choose_order_status_args(args.order_status, r);
+      execute_with_retry(TxnOrderStatus, OrderStatusCounter);
     } else {
-      stock_level_caller c;
-      choose_stock_level_args(c.a, r);
-      execute_with_retry(c, StockLevelCounter);
+      choose_stock_level_args(args.stock_level, r);
+      execute_with_retry(TxnStockLevel, StockLevelCounter);
     }
   }
 
@@ -583,6 +568,15 @@ protected:
   }
 
 private:
+  union {
+    tpcc_new_order_args new_order;
+    tpcc_delivery_args delivery;
+    tpcc_payment_args payment;
+    tpcc_order_status_args order_status;
+    tpcc_stock_level_args stock_level;
+  } args;
+
+ private:
   int32_t last_no_o_ids[10]; // XXX(stephentu): hack
 
   // some scratch buffer space
@@ -1189,8 +1183,9 @@ static event_counter evt_tpcc_cross_partition_new_order_txns("tpcc_cross_partiti
 static event_counter evt_tpcc_cross_partition_payment_txns("tpcc_cross_partition_payment_txns");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_new_order(tpcc_new_order_args& a)
+tpcc_worker::txn_new_order()
 {
+  tpcc_new_order_args& a = args.new_order;
   INVARIANT(!g_disable_xpartition_txn || a.allLocal);
   if (!a.allLocal)
     ++evt_tpcc_cross_partition_new_order_txns;
@@ -1368,8 +1363,9 @@ private:
 STATIC_COUNTER_DECL(scopedperf::tod_ctr, delivery_probe0_tod, delivery_probe0_cg)
 
 tpcc_worker::txn_result
-tpcc_worker::txn_delivery(tpcc_delivery_args& a)
+tpcc_worker::txn_delivery()
 {
+  tpcc_delivery_args& a = args.delivery;
   const uint32_t ts = GetCurrentTimeMillis();
 
   // worst case txn profile:
@@ -1480,8 +1476,9 @@ tpcc_worker::txn_delivery(tpcc_delivery_args& a)
 static event_avg_counter evt_avg_cust_name_idx_scan_size("avg_cust_name_idx_scan_size");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_payment(tpcc_payment_args& a)
+tpcc_worker::txn_payment()
 {
+  tpcc_payment_args& a = args.payment;
   const uint32_t ts = GetCurrentTimeMillis();
   INVARIANT(!g_disable_xpartition_txn || a.customerWarehouseID == a.warehouse_id);
 
@@ -1647,8 +1644,9 @@ public:
 STATIC_COUNTER_DECL(scopedperf::tod_ctr, order_status_probe0_tod, order_status_probe0_cg)
 
 tpcc_worker::txn_result
-tpcc_worker::txn_order_status(tpcc_order_status_args& a)
+tpcc_worker::txn_order_status()
 {
+  tpcc_order_status_args& a = args.order_status;
   // output from txn counters:
   //   max_absent_range_set_size : 0
   //   max_absent_set_size : 0
@@ -1798,8 +1796,9 @@ STATIC_COUNTER_DECL(scopedperf::tod_ctr, stock_level_probe2_tod, stock_level_pro
 static event_avg_counter evt_avg_stock_level_loop_join_lookups("stock_level_loop_join_lookups");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_stock_level(tpcc_stock_level_args& a)
+tpcc_worker::txn_stock_level()
 {
+  tpcc_stock_level_args& a = args.stock_level;
   // output from txn counters:
   //   max_absent_range_set_size : 0
   //   max_absent_set_size : 0
