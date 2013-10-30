@@ -188,4 +188,10 @@ struct tpcc_order_status_args {
   uint districtID;
 };
 
+struct tpcc_stock_level_args {
+  uint warehouse_id;
+  uint threshold;
+  uint districtID;
+};
+
 #endif

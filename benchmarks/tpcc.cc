@@ -537,6 +537,14 @@ public:
     a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
     a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
   }
+
+  static inline void
+  choose_stock_level_args(tpcc_stock_level_args& a, fast_random& r,
+                          uint warehouse_id_start, uint warehouse_id_end) {
+    a.warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
+    a.threshold = RandomNumber(r, 10, 20);
+    a.districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
+  }
 };
 
 string tpcc_worker_mixin::NameTokens[] =
@@ -659,13 +667,21 @@ public:
     return static_cast<tpcc_worker *>(w)->txn_order_status(a);
   }
 
-  txn_result txn_stock_level();
+
+  void choose_stock_level_args(tpcc_stock_level_args& a) {
+    tpcc_worker_mixin::choose_stock_level_args
+      (a, this->r, warehouse_id_start, warehouse_id_end);
+  }
+
+  txn_result txn_stock_level(tpcc_stock_level_args& a);
 
   static txn_result
   TxnStockLevel(bench_worker *w)
   {
     ANON_REGION("TxnStockLevel:", &tpcc_txn_cg);
-    return static_cast<tpcc_worker *>(w)->txn_stock_level();
+    tpcc_stock_level_args a;
+    static_cast<tpcc_worker*>(w)->choose_stock_level_args(a);
+    return static_cast<tpcc_worker *>(w)->txn_stock_level(a);
   }
 
   virtual workload_desc_vec
@@ -1931,12 +1947,8 @@ STATIC_COUNTER_DECL(scopedperf::tod_ctr, stock_level_probe2_tod, stock_level_pro
 static event_avg_counter evt_avg_stock_level_loop_join_lookups("stock_level_loop_join_lookups");
 
 tpcc_worker::txn_result
-tpcc_worker::txn_stock_level()
+tpcc_worker::txn_stock_level(tpcc_stock_level_args& a)
 {
-  const uint warehouse_id = PickWarehouseId(r, warehouse_id_start, warehouse_id_end);
-  const uint threshold = RandomNumber(r, 10, 20);
-  const uint districtID = RandomNumber(r, 1, NumDistrictsPerWarehouse());
-
   // output from txn counters:
   //   max_absent_range_set_size : 0
   //   max_absent_set_size : 0
@@ -1957,24 +1969,24 @@ tpcc_worker::txn_stock_level()
   // NB: since txn_stock_level() is a RO txn, we assume that
   // locking is un-necessary (since we can just read from some old snapshot)
   try {
-    const district::key k_d(warehouse_id, districtID);
-    ALWAYS_ASSERT(tbl_district(warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
+    const district::key k_d(a.warehouse_id, a.districtID);
+    ALWAYS_ASSERT(tbl_district(a.warehouse_id)->get(txn, Encode(obj_key0, k_d), obj_v));
     district::value v_d_temp;
     const district::value *v_d = Decode(obj_v, v_d_temp);
     checker::SanityCheckDistrict(&k_d, v_d);
 
     const uint64_t cur_next_o_id = g_new_order_fast_id_gen ?
-      NewOrderIdHolder(warehouse_id, districtID).load(memory_order_acquire) :
+      NewOrderIdHolder(a.warehouse_id, a.districtID).load(memory_order_acquire) :
       v_d->d_next_o_id;
 
     // manual joins are fun!
     order_line_scan_callback c;
     const int32_t lower = cur_next_o_id >= 20 ? (cur_next_o_id - 20) : 0;
-    const order_line::key k_ol_0(warehouse_id, districtID, lower, 0);
-    const order_line::key k_ol_1(warehouse_id, districtID, cur_next_o_id, 0);
+    const order_line::key k_ol_0(a.warehouse_id, a.districtID, lower, 0);
+    const order_line::key k_ol_1(a.warehouse_id, a.districtID, cur_next_o_id, 0);
     {
       ANON_REGION("StockLevelOrderLineScan:", &stock_level_probe0_cg);
-      tbl_order_line(warehouse_id)->scan(txn, Encode(obj_key0, k_ol_0), &Encode(obj_key1, k_ol_1), c, s_arena.get());
+      tbl_order_line(a.warehouse_id)->scan(txn, Encode(obj_key0, k_ol_0), &Encode(obj_key1, k_ol_1), c, s_arena.get());
     }
     {
       small_unordered_map<uint, bool, 512> s_i_ids_distinct;
@@ -1983,17 +1995,17 @@ tpcc_worker::txn_stock_level()
 
         const size_t nbytesread = serializer<int16_t, true>::max_nbytes();
 
-        const stock::key k_s(warehouse_id, p.first);
+        const stock::key k_s(a.warehouse_id, p.first);
         INVARIANT(p.first >= 1 && p.first <= NumItems());
         {
           ANON_REGION("StockLevelLoopJoinGet:", &stock_level_probe2_cg);
-          ALWAYS_ASSERT(tbl_stock(warehouse_id)->get(txn, Encode(obj_key0, k_s), obj_v, nbytesread));
+          ALWAYS_ASSERT(tbl_stock(a.warehouse_id)->get(txn, Encode(obj_key0, k_s), obj_v, nbytesread));
         }
         INVARIANT(obj_v.size() <= nbytesread);
         const uint8_t *ptr = (const uint8_t *) obj_v.data();
         int16_t i16tmp;
         ptr = serializer<int16_t, true>::read(ptr, &i16tmp);
-        if (i16tmp < int(threshold))
+        if (i16tmp < int(a.threshold))
           s_i_ids_distinct[p.first] = 1;
       }
       evt_avg_stock_level_loop_join_lookups.offer(c.s_i_ids.size());
