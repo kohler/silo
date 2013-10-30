@@ -170,6 +170,11 @@ struct tpcc_new_order_args {
   bool allLocal;
 };
 
+struct tpcc_delivery_args {
+  uint warehouse_id;
+  uint o_carrier_id;
+};
+
 struct tpcc_payment_args {
   uint warehouse_id;
   uint districtID;
